@@ -8,7 +8,7 @@ import { computeTactics } from '@/lib/tactics';
 import { distanceKm } from '@/lib/airports';
 import { simulatePrice } from '@/lib/price-engine';
 import { groupPricesBySeries, getPrimarySeriesPoints, primarySeriesKey } from '@/lib/series';
-import PriceHistoryChart from '@/components/PriceHistoryChart';
+import PriceHeatmap from '@/components/PriceHeatmap';
 import VerdictPanel from '@/components/VerdictPanel';
 import TacticsPanel from '@/components/TacticsPanel';
 import CheckNowButton from '@/components/CheckNowButton';
@@ -49,25 +49,22 @@ export default function WatchDetail({ params }: { params: { id: string } }) {
   const score = computeDealScore({ currentPrice, history: primary, distanceKm: km, departDate: w.depart_date });
   const tactics = computeTactics(w, prices, currentPrice);
 
-  // Séries pour le graphique : fenêtre 30 derniers jours par série,
-  // minimum toutes périodes pour la ligne de référence. Le graphique
-  // démarre au premier relevé réel — aucune donnée passée fabriquée.
+  // Points pour la heatmap : fenêtre des 30 derniers jours de relevés,
+  // toutes séries confondues (routes × dates flexibles). Les séries sont
+  // ordonnées principale d'abord — la heatmap garde cet ordre de lignes.
+  // Aucune donnée passée fabriquée : seuls les relevés mesurés.
   const cutoff = Date.now() - 30 * 86400000;
   const pKey = primarySeriesKey(w);
-  const chartSeries = groupPricesBySeries(prices, pKey)
-    .map(s => {
-      const windowPts = s.points.filter(p => new Date(p.checked_at.replace(' ', 'T') + 'Z').getTime() >= cutoff);
-      return {
-        key: s.key,
-        origin: s.origin,
-        destination: s.destination,
-        departDate: s.departDate,
-        points: (windowPts.length ? windowPts : s.points.slice(-1)).map(p => ({ checked_at: p.checked_at, price: p.price })),
-        allTimeMin: Math.min(...s.points.map(p => p.price)),
-        totalPoints: s.points.length,
-      };
-    })
-    .filter(s => s.points.length > 0);
+  const heatmapPoints = groupPricesBySeries(prices, pKey)
+    .flatMap(s => s.points)
+    .filter(p => new Date(p.checked_at.replace(' ', 'T') + 'Z').getTime() >= cutoff)
+    .map(p => ({
+      origin: p.origin,
+      destination: p.destination,
+      departDate: p.depart_date,
+      price: p.price,
+      checkedAt: p.checked_at,
+    }));
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -85,10 +82,10 @@ export default function WatchDetail({ params }: { params: { id: string } }) {
       <VerdictPanel score={score} />
 
       <div className="card">
-        <h2 className="font-semibold mb-4">Historique du prix <span className="text-xs font-normal opacity-50">(30 derniers jours)</span></h2>
-        {chartSeries.length
-          ? <PriceHistoryChart series={chartSeries} />
-          : <p className="text-sm opacity-50 py-10 text-center">Pas encore de relevé — l'historique se construit à partir de la première vérification de la surveillance.</p>}
+        <h2 className="font-semibold mb-4">Prix par route et date <span className="text-xs font-normal opacity-50">(dates flexibles · 30 derniers jours · faites défiler →)</span></h2>
+        {heatmapPoints.length
+          ? <PriceHeatmap points={heatmapPoints} />
+          : <p className="text-sm opacity-50 py-10 text-center">Pas encore de relevé — la heatmap se construit à partir de la première vérification de la surveillance.</p>}
       </div>
 
       <div>
