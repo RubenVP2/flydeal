@@ -39,11 +39,36 @@ Success `200`:
   "currency": "EUR",
   "provider": "fast-flights",
   "trip": "one-way",
-  "flights_count": 3
+  "flights_count": 3,
+  "details": {
+    "airlines": ["Air France"],
+    "type": "best",
+    "stops": 0,
+    "total_duration_min": 105,
+    "legs": [
+      {
+        "from_code": "CDG",
+        "from_name": "Paris Charles de Gaulle",
+        "to_code": "BCN",
+        "to_name": "Barcelona-El Prat",
+        "departure": "2026-03-01T10:35",
+        "arrival": "2026-03-01T12:20",
+        "duration_min": 105,
+        "plane_type": "Airbus A320"
+      }
+    ],
+    "carbon": { "emission_g": 92500, "typical_g": 110000 }
+  }
 }
 ```
 
 `price` is the cheapest returned fare for the whole requested party/trip.
+`details` describes that same cheapest offer — everything Google Flights
+exposes via fast-flights v3: airlines, per-leg airports (codes + full names),
+local departure/arrival times, per-leg duration and aircraft type, stops
+count (`legs - 1`), total flight time, and carbon emissions vs the route
+average. Leg times are **local to each airport** (`YYYY-MM-DDTHH:MM`, no
+timezone). Note: fast-flights v3 does not extract flight numbers.
 
 Errors:
 

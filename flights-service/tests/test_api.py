@@ -6,13 +6,30 @@ fast_flights.get_flights is always monkeypatched — no real network calls.
 import fast_flights
 import pytest
 from fastapi.testclient import TestClient
-from fast_flights.model import CarbonEmission, Flights
+from fast_flights.model import (
+    Airport,
+    CarbonEmission,
+    Flights,
+    SimpleDatetime,
+    SingleFlight,
+)
 from fast_flights.parser import ResultList
 from fast_flights.pb.flights_pb2 import Passenger
 
 from app.main import app
 
 client = TestClient(app)
+
+
+def make_leg() -> SingleFlight:
+    return SingleFlight(
+        from_airport=Airport(code="CDG", name="Paris Charles de Gaulle"),
+        to_airport=Airport(code="JFK", name="New York John F. Kennedy"),
+        departure=SimpleDatetime(date=(2026, 3, 1), time=(10, 35)),
+        arrival=SimpleDatetime(date=(2026, 3, 1), time=(13, 20)),
+        duration=465,
+        plane_type="Boeing 777-300ER",
+    )
 
 
 def make_result(*prices: int) -> ResultList:
@@ -23,9 +40,9 @@ def make_result(*prices: int) -> ResultList:
             Flights(
                 type="one-way",
                 price=p,
-                airlines=["AF"],
-                flights=[],
-                carbon=CarbonEmission(typical_on_route=0, emission=0),
+                airlines=["Air France"],
+                flights=[make_leg()],
+                carbon=CarbonEmission(typical_on_route=900000, emission=750000),
             )
         )
     return result
@@ -67,14 +84,36 @@ def test_one_way_happy_path_min_price(mock_get_flights):
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body == {
-        "price": 120.0,  # min of 250, 120, 380
-        "currency": "EUR",
-        "provider": "fast-flights",
-        "trip": "one-way",
-        "flights_count": 3,
-    }
+    assert body["price"] == 120.0  # min of 250, 120, 380
+    assert body["currency"] == "EUR"
+    assert body["provider"] == "fast-flights"
+    assert body["trip"] == "one-way"
+    assert body["flights_count"] == 3
     assert isinstance(body["price"], float)
+
+
+def test_details_describe_the_cheapest_offer(mock_get_flights):
+    """Le bloc `details` doit décrire l'offre la moins chère : compagnies,
+    segments complets, escales, durée totale et CO₂."""
+    resp = client.get(
+        "/api/v1/search",
+        params={"from_airport": "CDG", "to_airport": "JFK", "depart_date": "2026-03-01"},
+    )
+    assert resp.status_code == 200
+    details = resp.json()["details"]
+    assert details["airlines"] == ["Air France"]
+    assert details["stops"] == 0
+    assert details["total_duration_min"] == 465
+    assert details["carbon"] == {"emission_g": 750000, "typical_g": 900000}
+    assert len(details["legs"]) == 1
+    leg = details["legs"][0]
+    assert leg["from_code"] == "CDG"
+    assert leg["from_name"] == "Paris Charles de Gaulle"
+    assert leg["to_code"] == "JFK"
+    assert leg["departure"] == "2026-03-01T10:35"
+    assert leg["arrival"] == "2026-03-01T13:20"
+    assert leg["duration_min"] == 465
+    assert leg["plane_type"] == "Boeing 777-300ER"
 
 
 def test_round_trip_builds_two_legs(mock_get_flights):
