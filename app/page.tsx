@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { Plus, ChevronRight, Clock, Trash2, Pencil } from 'lucide-react';
-import { listWatches, getPrices } from '@/lib/db';
+import { listWatches, getPrices, Watch } from '@/lib/db';
 import { ensureInitialized } from '@/lib/init';
 import { computeDealScore } from '@/lib/deal-score';
 import { distanceKm } from '@/lib/airports';
@@ -23,6 +23,23 @@ function nextIn(iso: string | null): string {
   if (ms < 0) return 'imminente';
   const h = Math.floor(ms / 3600000), m = Math.round((ms % 3600000) / 60000);
   return h > 24 ? `dans ${Math.round(h / 24)} j` : h > 0 ? `dans ${h} h ${m} min` : `dans ${m} min`;
+}
+
+const SEAT_LABELS: Record<string, string> = {
+  economy: 'Économie', 'premium-economy': 'Premium Éco', business: 'Affaires', first: 'Première',
+};
+
+// Ligne compacte de métadonnées : dates, flexibilité, passagers, cabine.
+function watchMeta(w: Watch): string {
+  const parts = [`Départ ${w.depart_date}`];
+  if (w.trip === 'round-trip' && w.return_date) parts.push(`Retour ${w.return_date}`);
+  parts.push(`±${w.flex_days} j`);
+  const party = [`${w.adults} ad.`];
+  if (w.children) party.push(`${w.children} enf.`);
+  if (w.infants) party.push(`${w.infants} bébé`);
+  parts.push(party.join(' '));
+  parts.push(SEAT_LABELS[w.seat] ?? w.seat);
+  return parts.join(' · ');
 }
 
 export default function Dashboard() {
@@ -68,7 +85,7 @@ export default function Dashboard() {
                       {w.origins.join(' / ')} → {w.destinations.join(' / ')}
                     </p>
                     <p className="text-xs opacity-60 mt-0.5">
-                      Départ {w.depart_date} · ±{w.flex_days} j · {w.last_checked_at ? `vérifié ${w.last_checked_at.slice(5, 16)}` : 'jamais vérifié'}
+                      {watchMeta(w)} · {w.last_checked_at ? `vérifié ${w.last_checked_at.slice(5, 16)}` : 'jamais vérifié'}
                     </p>
                   </div>
                   <ScoreGauge score={score.score} size={64} />

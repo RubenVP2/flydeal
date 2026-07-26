@@ -8,9 +8,22 @@ services:
       - "3000"
     environment:
       - DATA_DIR=/app/data
-      # - FLY_API_KEY=votre_cle_flightapi   # optionnel : active le provider FlightAPI.io
+      # Provider de prix réels : service fast-flights (Google Flights) ci-dessous.
+      # Sans cette variable, l'app retombe sur le provider de simulation.
+      - FAST_FLIGHTS_URL=http://flights:8000
     volumes:
       - flydeal-data:/app/data
+    depends_on:
+      flights:
+        condition: service_started
+    restart: unless-stopped
+
+  # Service de récupération des prix : scraper Google Flights (fast-flights,
+  # https://github.com/AWeirdDev/flights) exposé en HTTP par FastAPI.
+  flights:
+    build: ./flights-service
+    expose:
+      - "8000"
     restart: unless-stopped
 
 volumes:

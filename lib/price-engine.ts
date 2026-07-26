@@ -1,23 +1,72 @@
 // ============================================================
 // MOTEUR DE PRIX — couche provider avec interface commune.
 // - SimulationProvider : prix réalistes et DÉTERMINISTES
-//   (seed = route + date) pour faire tourner l'app sans clé API.
-// - FlightApiProvider : prix réels via FlightAPI.io
-//   (https://www.flightapi.io/), activé si FLY_API_KEY est
-//   présent dans l'environnement (remplace Amadeus, dont
-//   l'API Developers a été décommissionnée).
+//   (seed = route + date) pour faire tourner l'app sans service
+//   externe.
+// - FastFlightsProvider : prix réels via le microservice Python
+//   auto-hébergé "flights-service" (fast-flights), activé si
+//   FAST_FLIGHTS_URL est présent dans l'environnement
+//   (remplace FlightAPI.io, qui a été abandonné).
+// Les options de recherche (aller-retour, passagers, cabine)
+// sont portées par SearchOptions et appliquées au prix de base
+// (par personne, aller simple) via applyOptions().
 // ============================================================
 import { distanceKm } from './airports';
 
+// ---------- Options de recherche ----------
+export type TripType = 'one-way' | 'round-trip';
+export type SeatClass = 'economy' | 'premium-economy' | 'business' | 'first';
+
+export interface SearchOptions {
+  trip: TripType;
+  returnDate: string | null; // YYYY-MM-DD, requis si trip = 'round-trip'
+  adults: number;
+  children: number;
+  infants: number;
+  seat: SeatClass;
+}
+
+export const DEFAULT_SEARCH_OPTIONS: SearchOptions = {
+  trip: 'one-way',
+  returnDate: null,
+  adults: 1,
+  children: 0,
+  infants: 0,
+  seat: 'economy',
+};
+
 export interface PriceQuote {
-  price: number;        // € TTC aller simple
+  price: number;        // € TTC total pour tout le groupe / trajet
   currency: 'EUR';
   provider: string;
+  options: SearchOptions;
 }
 
 export interface PriceProvider {
   name: string;
-  getPrice(origin: string, destination: string, departDate: string, at?: Date): Promise<PriceQuote>;
+  getPrice(origin: string, destination: string, departDate: string, options?: SearchOptions, at?: Date): Promise<PriceQuote>;
+}
+
+// Multiplicateurs cabine (par rapport à Economy).
+const SEAT_MULTIPLIERS: Record<SeatClass, number> = {
+  economy: 1,
+  'premium-economy': 1.4,
+  business: 2.2,
+  first: 3.2,
+};
+
+/**
+ * Convertit un prix de base (par personne, aller simple) en prix total
+ * pour tout le groupe et le trajet :
+ *  - aller-retour : ×1.85,
+ *  - cabine : Economy ×1 · Premium Éco ×1.4 · Affaires ×2.2 · Première ×3.2,
+ *  - groupe : adultes ×1 + enfants ×0.75 + bébés ×0.1.
+ */
+export function applyOptions(basePrice: number, options: SearchOptions): number {
+  const trip = options.trip === 'round-trip' ? 1.85 : 1;
+  const seat = SEAT_MULTIPLIERS[options.seat];
+  const party = options.adults + options.children * 0.75 + options.infants * 0.1;
+  return Math.round(basePrice * trip * seat * party * 100) / 100;
 }
 
 // ---------- PRNG déterministe (mulberry32) ----------
@@ -42,8 +91,8 @@ function gauss(rng: () => number): number {
 }
 
 /**
- * Génère un prix plausible pour une route/date donnée.
- * Composantes :
+ * Génère un prix de base plausible (par personne, aller simple) pour une
+ * route/date donnée. Composantes :
  *  1. Base route : fonction de la distance (coût/km dégressif) + facteur propre à la paire O/D.
  *  2. Saisonnalité : juillet-août, fêtes de fin d'année plus chers ; janvier/novembre creux.
  *  3. Rampe de hausse à l'approche du départ (yield management) : prix quasi stable >60j,
@@ -96,65 +145,78 @@ export function simulatePrice(origin: string, destination: string, departDate: s
 
 export class SimulationProvider implements PriceProvider {
   name = 'simulation';
-  async getPrice(origin: string, destination: string, departDate: string, at: Date = new Date()): Promise<PriceQuote> {
-    return { price: simulatePrice(origin, destination, departDate, at), currency: 'EUR', provider: this.name };
+  async getPrice(
+    origin: string,
+    destination: string,
+    departDate: string,
+    options: SearchOptions = DEFAULT_SEARCH_OPTIONS,
+    at: Date = new Date(),
+  ): Promise<PriceQuote> {
+    return {
+      price: applyOptions(simulatePrice(origin, destination, departDate, at), options),
+      currency: 'EUR',
+      provider: this.name,
+      options,
+    };
   }
 }
 
-// ---------- Provider FlightAPI.io (activé via FLY_API_KEY) ----------
-// Doc : https://docs.flightapi.io/flight-price-api/oneway-trip-api
-// Endpoint : GET {base}/onewaytrip/{key}/{from}/{to}/{YYYY-MM-DD}/1/0/0/Economy/EUR
-// Réponse : { itineraries: [{ pricing_options: [{ price: { amount } }] }], legs, segments }
-// Codes erreur : 404 pas de vol/utilisateur · 410 timeout · 429 quota dépassé.
-export const FLIGHTAPI_BASE_URL = 'https://api.flightapi.io';
+// ---------- Provider fast-flights (microservice Python auto-hébergé) ----------
+// Contrat : GET {FAST_FLIGHTS_URL}/api/v1/search?from_airport=CDG&to_airport=JFK
+//   &depart_date=2026-09-10&return_date=2026-09-24&trip=round-trip&adults=2
+//   &children=1&infants=0&seat=economy&currency=EUR&language=fr
+// 200 → { "price": 412.5, "currency": "EUR", "provider": "fast-flights", ... }
+// 404 → aucun vol trouvé · 4xx → paramètres invalides · 502 → échec du scraper.
+// return_date est omis pour un aller simple ; requis pour un aller-retour.
+export class FastFlightsProvider implements PriceProvider {
+  name = 'fast-flights';
+  private baseUrl: string | undefined;
 
-/**
- * Extrait le prix le plus bas (€) d'une réponse Oneway Trip de FlightAPI.io.
- * Parcourt tous les itinéraires × options de prix ; ignore les montants invalides.
- */
-export function extractLowestPrice(data: any): number | null {
-  const amounts: number[] = [];
-  for (const itin of data?.itineraries ?? []) {
-    for (const opt of itin?.pricing_options ?? []) {
-      const amount = Number(opt?.price?.amount);
-      if (Number.isFinite(amount) && amount > 0) amounts.push(amount);
+  constructor(baseUrl?: string) {
+    this.baseUrl = baseUrl ?? process.env.FAST_FLIGHTS_URL;
+  }
+
+  buildUrl(origin: string, destination: string, departDate: string, options: SearchOptions): string {
+    const url = new URL('/api/v1/search', this.baseUrl ?? 'http://__missing__');
+    url.searchParams.set('from_airport', origin);
+    url.searchParams.set('to_airport', destination);
+    url.searchParams.set('depart_date', departDate);
+    if (options.trip === 'round-trip' && options.returnDate) {
+      url.searchParams.set('return_date', options.returnDate);
     }
-  }
-  return amounts.length ? Math.min(...amounts) : null;
-}
-
-export class FlightApiProvider implements PriceProvider {
-  name = 'flightapi';
-  private baseUrl: string;
-
-  constructor(baseUrl: string = FLIGHTAPI_BASE_URL) {
-    this.baseUrl = baseUrl;
+    url.searchParams.set('trip', options.trip);
+    url.searchParams.set('adults', String(options.adults));
+    url.searchParams.set('children', String(options.children));
+    url.searchParams.set('infants', String(options.infants));
+    url.searchParams.set('seat', options.seat);
+    url.searchParams.set('currency', 'EUR');
+    url.searchParams.set('language', 'fr');
+    return url.toString();
   }
 
-  buildUrl(apiKey: string, origin: string, destination: string, departDate: string): string {
-    return `${this.baseUrl}/onewaytrip/${apiKey}/${origin}/${destination}/${departDate}/1/0/0/Economy/EUR`;
-  }
+  async getPrice(
+    origin: string,
+    destination: string,
+    departDate: string,
+    options: SearchOptions = DEFAULT_SEARCH_OPTIONS,
+  ): Promise<PriceQuote> {
+    if (!this.baseUrl) throw new Error('flights-service: FAST_FLIGHTS_URL manquante dans l\'environnement');
 
-  async getPrice(origin: string, destination: string, departDate: string): Promise<PriceQuote> {
-    const apiKey = process.env.FLY_API_KEY;
-    if (!apiKey) throw new Error('FlightAPI: FLY_API_KEY manquante dans l\'environnement');
-
-    const res = await fetch(this.buildUrl(apiKey, origin, destination, departDate), {
+    const res = await fetch(this.buildUrl(origin, destination, departDate, options), {
       signal: AbortSignal.timeout(30000),
     });
-    if (res.status === 429) throw new Error('FlightAPI: quota dépassé (429) — ralentir la cadence ou upgrader le plan');
-    if (res.status === 404 || res.status === 410) throw new Error(`FlightAPI: aucune offre pour ${origin}-${destination} le ${departDate} (${res.status})`);
-    if (!res.ok) throw new Error(`FlightAPI offers failed: ${res.status}`);
+    if (res.status === 404) throw new Error(`flights-service: aucune offre pour ${origin}-${destination} le ${departDate}`);
+    if (!res.ok) throw new Error(`flights-service: recherche échouée (${res.status})`);
 
     const data = await res.json();
-    const price = extractLowestPrice(data);
-    if (price === null) throw new Error('FlightAPI: réponse sans offre tarifée');
-    return { price, currency: 'EUR', provider: this.name };
+    const price = Number(data?.price);
+    if (!Number.isFinite(price) || price <= 0) throw new Error('flights-service: réponse sans offre tarifée');
+    return { price, currency: 'EUR', provider: this.name, options };
   }
 }
 
-// Sélection du provider actif : FlightAPI si FLY_API_KEY présente, sinon simulation.
+// Sélection du provider actif : flights-service si FAST_FLIGHTS_URL présente, sinon simulation.
 export function getProvider(): PriceProvider {
-  if (process.env.FLY_API_KEY) return new FlightApiProvider();
+  if (process.env.FAST_FLIGHTS_URL) return new FastFlightsProvider();
   return new SimulationProvider();
 }

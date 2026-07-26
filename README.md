@@ -8,37 +8,51 @@ Deux sources de prix, sélectionnées automatiquement au démarrage :
 
 | Provider | Activation | Description |
 |---|---|---|
-| **FlightAPI.io** | `FLY_API_KEY` définie | Prix réels multi-vendeurs (700+ compagnies/OTA) via l'API Oneway Trip. |
-| **Simulation** | (défaut) | Prix déterministes réalistes — aucune clé requise, idéal pour le dev. |
+| **flights-service** (fast-flights) | `FAST_FLIGHTS_URL` définie | Prix réels via le microservice Python auto-hébergé (scraping Google Flights). |
+| **Simulation** | (défaut) | Prix déterministes réalistes — aucun service requis, idéal pour le dev. |
 
-### Migration Amadeus → FlightAPI.io
+### Migration FlightAPI.io → flights-service
 
-L'API Amadeus for Developers ayant été décommissionnée, FlyDeal utilise désormais **[FlightAPI.io](https://www.flightapi.io/)**. Les anciennes variables `AMADEUS_CLIENT_ID` / `AMADEUS_CLIENT_SECRET` sont supprimées et remplacées par une seule clé :
+FlyDeal n'utilise plus FlightAPI.io : la variable `FLY_API_KEY` est supprimée et remplacée par l'URL du microservice auto-hébergé :
 
 ```bash
-FLY_API_KEY=votre_cle_flightapi
+FAST_FLIGHTS_URL=http://localhost:8000
 ```
-
-Sur Dokploy, la variable est déjà configurée dans les env vars du service — aucune autre action n'est requise, un redéploiement suffit.
 
 ### API utilisée
 
 ```
-GET https://api.flightapi.io/onewaytrip/{FLY_API_KEY}/{origine}/{destination}/{YYYY-MM-DD}/1/0/0/Economy/EUR
+GET {FAST_FLIGHTS_URL}/api/v1/search?from_airport=CDG&to_airport=JFK&depart_date=2026-09-10
+    &return_date=2026-09-24&trip=round-trip&adults=2&children=1&infants=0
+    &seat=economy&currency=EUR&language=fr
 ```
 
-Réponse : `itineraries[].pricing_options[].price.amount` — FlyDeal retient le **prix le plus bas** (€ TTC aller simple, 1 adulte, Economy).
-Codes d'erreur gérés : `404`/`410` (aucune offre), `429` (quota dépassé — ralentir la cadence ou upgrader le plan).
-Doc officielle : https://docs.flightapi.io/flight-price-api/oneway-trip-api
+Réponse : `{ "price": 412.5, "currency": "EUR", "provider": "fast-flights", ... }` — `price` est le **prix total le plus bas** (€ TTC) pour tout le groupe et le trajet.
+`return_date` est omis pour un aller simple, requis pour un aller-retour.
+Codes d'erreur gérés : `404` (aucune offre), autres 4xx (paramètres invalides), `502` (échec du scraper).
+
+## Options de recherche
+
+Chaque surveillance peut préciser :
+
+- **Type de trajet** : aller simple ou aller-retour (date de retour obligatoire, ≥ date de départ) ;
+- **Passagers** : adultes (1-9), enfants (0-8), bébés (0-8, ≤ nombre d'adultes) ;
+- **Cabine** : Économie, Premium Éco, Affaires, Première.
+
+Ces options sont propagées au provider à chaque vérification (scheduler et « vérifier maintenant »), et la flexibilité ±N jours s'applique conjointement à l'aller et au retour. En mode simulation, elles modulent le prix de base : aller-retour ×1.85, cabine ×1 à ×3.2, enfants ×0.75, bébés ×0.1.
 
 ## Tests
 
 ```bash
 npm install
-npm test
+npm test              # tests unitaires (Vitest)
+npm run test:coverage # avec couverture (seuils : 85 % lignes/fonctions/branches/instructions)
+npm run test:e2e      # tests fonctionnels de bout en bout
 ```
 
-La suite (`lib/price-engine.test.ts`, Vitest lancé via npx — aucune dépendance ajoutée au lockfile) couvre : déterminisme et rampe yield du simulateur, construction d'URL FlightAPI.io, extraction du prix minimal depuis une réponse réelle, et gestion des erreurs (clé absente, 404/410/429, réponse vide). Les appels HTTP sont mockés — aucune clé ni quota nécessaire.
+La suite unitaire couvre le moteur de prix (simulation déterministe, multiplicateurs d'options, provider fast-flights avec fetch mocké), la couche SQLite (CRUD + migration de schéma), le scheduler (fenêtres J-60/J-21/J-14/J-7, propagation des options) et les routes API.
+
+Les tests e2e (`tests/e2e/run-e2e.mjs`, Node pur) démarrent un stub flights-service et un `next dev` sur ports éphémères, puis vérifient tout le cycle : création de surveillances (aller simple / aller-retour), validation 400, vérification immédiate avec propagation des options au stub, modification, suppression et page d'accueil.
 
 ## Déploiement (Dokploy)
 

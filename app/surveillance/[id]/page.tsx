@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Clock, RefreshCw } from 'lucide-react';
-import { getWatch, getPrices } from '@/lib/db';
+import { getWatch, getPrices, Watch } from '@/lib/db';
 import { ensureInitialized } from '@/lib/init';
 import { computeDealScore } from '@/lib/deal-score';
 import { computeTactics } from '@/lib/tactics';
@@ -13,6 +13,23 @@ import TacticsPanel from '@/components/TacticsPanel';
 import CheckNowButton from '@/components/CheckNowButton';
 
 export const dynamic = 'force-dynamic';
+
+const SEAT_LABELS: Record<string, string> = {
+  economy: 'Économie', 'premium-economy': 'Premium Éco', business: 'Affaires', first: 'Première',
+};
+
+// Ligne compacte de métadonnées : dates, flexibilité, passagers, cabine.
+function watchMeta(w: Watch): string {
+  const parts = [`Départ ${w.depart_date}`];
+  if (w.trip === 'round-trip' && w.return_date) parts.push(`Retour ${w.return_date}`);
+  parts.push(`±${w.flex_days} j`);
+  const party = [`${w.adults} ad.`];
+  if (w.children) party.push(`${w.children} enf.`);
+  if (w.infants) party.push(`${w.infants} bébé`);
+  parts.push(party.join(' '));
+  parts.push(SEAT_LABELS[w.seat] ?? w.seat);
+  return parts.join(' · ');
+}
 
 export default function WatchDetail({ params }: { params: { id: string } }) {
   ensureInitialized();
@@ -36,7 +53,7 @@ export default function WatchDetail({ params }: { params: { id: string } }) {
           <Link href="/" className="text-xs opacity-60 hover:opacity-100 flex items-center gap-1 mb-1"><ArrowLeft size={12} /> Retour</Link>
           <h1 className="text-2xl font-bold tracking-tight">{w.origins.join(' / ')} → {w.destinations.join(' / ')}</h1>
           <p className="text-sm opacity-60 mt-0.5">
-            Départ {w.depart_date} · ±{w.flex_days} j · {km.toLocaleString('fr-FR')} km · {prices.length} relevés
+            {watchMeta(w)} · {km.toLocaleString('fr-FR')} km · {prices.length} relevés
           </p>
         </div>
         <CheckNowButton id={w.id} />

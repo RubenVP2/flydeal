@@ -8,7 +8,7 @@
 //  - sinon cadence de base : toutes les 6 h.
 // ============================================================
 import cron from 'node-cron';
-import { listWatches, addPrice, touchWatchCheck, Watch } from './db';
+import { listWatches, addPrice, touchWatchCheck, watchOptions, Watch } from './db';
 import { getProvider } from './price-engine';
 
 export function daysToDeparture(w: Watch, from: Date = new Date()): number {
@@ -63,13 +63,17 @@ export async function checkWatch(w: Watch): Promise<void> {
   const provider = getProvider();
   const now = new Date();
   const jobs: Promise<void>[] = [];
+  const shiftDate = (iso: string, delta: number) =>
+    new Date(new Date(iso + 'T12:00:00Z').getTime() + delta * 86400000).toISOString().slice(0, 10);
   for (const o of w.origins) {
     for (const d of w.destinations) {
       for (let delta = -w.flex_days; delta <= w.flex_days; delta++) {
-        const dd = new Date(new Date(w.depart_date + 'T12:00:00Z').getTime() + delta * 86400000);
-        const dateStr = dd.toISOString().slice(0, 10);
+        const dateStr = shiftDate(w.depart_date, delta);
+        // Le retour suit la même flexibilité que l'aller (aller-retour uniquement).
+        const shiftedReturn = w.return_date ? shiftDate(w.return_date, delta) : null;
+        const options = { ...watchOptions(w), returnDate: shiftedReturn };
         jobs.push(
-          provider.getPrice(o, d, dateStr, now)
+          provider.getPrice(o, d, dateStr, options, now)
             .then(q => addPrice(w.id, o, d, dateStr, q.price))
             .catch(err => console.error(`[flydeal] prix ${o}->${d} ${dateStr}:`, err.message))
         );

@@ -2,6 +2,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import { SearchOptions, DEFAULT_SEARCH_OPTIONS } from './price-engine';
 
 const DATA_DIR = process.env.DATA_DIR || '/app/data';
 // En dev local hors Docker, fallback sur ./data du projet.
@@ -42,12 +43,35 @@ CREATE TABLE IF NOT EXISTS prices (
 CREATE INDEX IF NOT EXISTS idx_prices_watch ON prices(watch_id, checked_at);
 `);
 
+// Migration idempotente : ajoute les colonnes d'options de recherche
+// (aller-retour, passagers, cabine) aux bases existantes.
+const WATCH_OPTION_COLUMNS: [string, string][] = [
+  ['trip', "TEXT NOT NULL DEFAULT 'one-way'"],
+  ['return_date', 'TEXT'],
+  ['adults', 'INTEGER NOT NULL DEFAULT 1'],
+  ['children', 'INTEGER NOT NULL DEFAULT 0'],
+  ['infants', 'INTEGER NOT NULL DEFAULT 0'],
+  ['seat', "TEXT NOT NULL DEFAULT 'economy'"],
+];
+const existing = new Set(
+  (db.prepare('PRAGMA table_info(watches)').all() as { name: string }[]).map(c => c.name)
+);
+for (const [col, def] of WATCH_OPTION_COLUMNS) {
+  if (!existing.has(col)) db.exec(`ALTER TABLE watches ADD COLUMN ${col} ${def}`);
+}
+
 export interface Watch {
   id: number;
   origins: string[];
   destinations: string[];
   depart_date: string;
   flex_days: number;
+  trip: 'one-way' | 'round-trip';
+  return_date: string | null;
+  adults: number;
+  children: number;
+  infants: number;
+  seat: 'economy' | 'premium-economy' | 'business' | 'first';
   created_at: string;
   last_checked_at: string | null;
   next_check_at: string | null;
@@ -76,15 +100,34 @@ export function getWatch(id: number): Watch | null {
   const r = db.prepare('SELECT * FROM watches WHERE id = ?').get(id) as WatchRow | undefined;
   return r ? mapWatch(r) : null;
 }
-export function createWatch(origins: string[], destinations: string[], depart_date: string, flex_days: number): Watch {
+export function createWatch(
+  origins: string[],
+  destinations: string[],
+  depart_date: string,
+  flex_days: number,
+  options: SearchOptions = DEFAULT_SEARCH_OPTIONS,
+): Watch {
   const info = db.prepare(
-    'INSERT INTO watches (origins, destinations, depart_date, flex_days) VALUES (?, ?, ?, ?)'
-  ).run(JSON.stringify(origins), JSON.stringify(destinations), depart_date, flex_days);
+    'INSERT INTO watches (origins, destinations, depart_date, flex_days, trip, return_date, adults, children, infants, seat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(
+    JSON.stringify(origins), JSON.stringify(destinations), depart_date, flex_days,
+    options.trip, options.returnDate, options.adults, options.children, options.infants, options.seat,
+  );
   return getWatch(info.lastInsertRowid as number)!;
 }
-export function updateWatch(id: number, origins: string[], destinations: string[], depart_date: string, flex_days: number): Watch | null {
-  db.prepare('UPDATE watches SET origins=?, destinations=?, depart_date=?, flex_days=? WHERE id=?')
-    .run(JSON.stringify(origins), JSON.stringify(destinations), depart_date, flex_days, id);
+export function updateWatch(
+  id: number,
+  origins: string[],
+  destinations: string[],
+  depart_date: string,
+  flex_days: number,
+  options: SearchOptions = DEFAULT_SEARCH_OPTIONS,
+): Watch | null {
+  db.prepare('UPDATE watches SET origins=?, destinations=?, depart_date=?, flex_days=?, trip=?, return_date=?, adults=?, children=?, infants=?, seat=? WHERE id=?')
+    .run(
+      JSON.stringify(origins), JSON.stringify(destinations), depart_date, flex_days,
+      options.trip, options.returnDate, options.adults, options.children, options.infants, options.seat, id,
+    );
   return getWatch(id);
 }
 export function deleteWatch(id: number): boolean {
@@ -107,4 +150,16 @@ export function touchWatchCheck(id: number, nextCheckAt: string): void {
 }
 export function setNextCheck(id: number, nextCheckAt: string): void {
   db.prepare('UPDATE watches SET next_check_at = ? WHERE id = ?').run(nextCheckAt, id);
+}
+
+/** Reconstruit les options de recherche d'une surveillance. */
+export function watchOptions(w: Watch): SearchOptions {
+  return {
+    trip: w.trip,
+    returnDate: w.return_date,
+    adults: w.adults,
+    children: w.children,
+    infants: w.infants,
+    seat: w.seat,
+  };
 }

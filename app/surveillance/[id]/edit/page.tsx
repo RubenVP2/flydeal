@@ -12,7 +12,10 @@ export default function EditWatchPage({ params }: { params: { id: string } }) {
   return (
     <div className="max-w-xl mx-auto space-y-4">
       <h1 className="text-2xl font-bold tracking-tight">Modifier la surveillance</h1>
-      <WatchForm watchId={w.id} initial={{ origins: w.origins, destinations: w.destinations, depart_date: w.depart_date, flex_days: w.flex_days }} />
+      <WatchForm watchId={w.id} initial={{
+        origins: w.origins, destinations: w.destinations, depart_date: w.depart_date, flex_days: w.flex_days,
+        trip: w.trip, return_date: w.return_date, adults: w.adults, children: w.children, infants: w.infants, seat: w.seat,
+      }} />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 // Seed de démonstration : 3 surveillances avec 30 jours d'historique simulé,
 // insérées uniquement si la base est vide.
 import { db, createWatch, addPrice, setNextCheck, Watch } from './db';
-import { simulatePrice } from './price-engine';
+import { simulatePrice, SearchOptions, DEFAULT_SEARCH_OPTIONS } from './price-engine';
 import { nextCheckTime } from './scheduler';
 
 export function seedIfEmpty(): void {
@@ -14,14 +14,18 @@ export function seedIfEmpty(): void {
     return d.toISOString().slice(0, 10);
   };
 
-  const demos: { origins: string[]; destinations: string[]; date: string; flex: number }[] = [
-    { origins: ['CDG', 'ORY'], destinations: ['JFK'], date: inDays(45), flex: 3 },
+  const demos: { origins: string[]; destinations: string[]; date: string; flex: number; options?: SearchOptions }[] = [
+    // Aller-retour 2 adultes pour illustrer les options de recherche.
+    {
+      origins: ['CDG', 'ORY'], destinations: ['JFK'], date: inDays(45), flex: 3,
+      options: { trip: 'round-trip', returnDate: inDays(52), adults: 2, children: 0, infants: 0, seat: 'economy' },
+    },
     { origins: ['CDG'], destinations: ['NRT', 'HND'], date: inDays(90), flex: 3 },
     { origins: ['LYS'], destinations: ['LIS'], date: inDays(18), flex: 2 },
   ];
 
   for (const d of demos) {
-    const w: Watch = createWatch(d.origins, d.destinations, d.date, d.flex);
+    const w: Watch = createWatch(d.origins, d.destinations, d.date, d.flex, d.options ?? DEFAULT_SEARCH_OPTIONS);
     // 30 jours d'historique : 2 relevés/jour sur la route principale + dates flex.
     for (let day = 30; day >= 0; day--) {
       for (const hour of [3, 15]) {

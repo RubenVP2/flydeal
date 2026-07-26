@@ -1,9 +1,15 @@
 node_modules
 .next
 data
+coverage
 *.db
 *.db-*
 .env
 .env.local
 .DS_Store
 npm-debug.log*
+tsconfig.tsbuildinfo
+# Artefacts Python du flights-service
+.venv
+__pycache__
+.pytest_cache

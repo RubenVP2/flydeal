@@ -2,42 +2,24 @@
 // TESTS — moteur de prix FlyDeal
 // Couvre :
 //  1. SimulationProvider : déterminisme, plausibilité, rampe yield.
-//  2. FlightApiProvider  : construction d'URL, extraction du prix
-//     le plus bas depuis une réponse réelle FlightAPI.io (fetch mocké),
-//     gestion des erreurs (404/410/429, sans clé, sans offre).
-//  3. getProvider() : sélection FlightAPI vs simulation selon FLY_API_KEY.
+//  2. applyOptions() : multiplicateurs trajet / cabine / groupe.
+//  3. FastFlightsProvider : construction d'URL conforme au contrat
+//     du microservice flights-service, happy path (fetch mocké) et
+//     gestion des erreurs (404, 502, réponse sans prix, URL absente).
+//  4. getProvider() : sélection fast-flights vs simulation selon
+//     FAST_FLIGHTS_URL.
 // Lancer : npm test
 // ============================================================
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   SimulationProvider,
-  FlightApiProvider,
+  FastFlightsProvider,
   simulatePrice,
-  extractLowestPrice,
+  applyOptions,
   getProvider,
+  DEFAULT_SEARCH_OPTIONS,
+  SearchOptions,
 } from './price-engine';
-
-// Réponse réaliste inspirée de la doc FlightAPI.io (Oneway Trip API).
-const SAMPLE_RESPONSE = {
-  itineraries: [
-    {
-      id: 'it1',
-      pricing_options: [
-        { id: 'p1', price: { amount: 152.4, update_status: 'current' }, items: [] },
-        { id: 'p2', price: { amount: 98.9, update_status: 'current' }, items: [] },
-      ],
-    },
-    {
-      id: 'it2',
-      pricing_options: [
-        { id: 'p3', price: { amount: 210.0, update_status: 'current' }, items: [] },
-        { id: 'p4', price: { amount: null }, items: [] }, // à ignorer
-      ],
-    },
-  ],
-  legs: [],
-  segments: [],
-};
 
 function mockFetchJson(body: unknown, status = 200) {
   return vi.fn(async () => ({
@@ -46,6 +28,19 @@ function mockFetchJson(body: unknown, status = 200) {
     json: async () => body,
   })) as unknown as typeof fetch;
 }
+
+// Réponse conforme au contrat flights-service (200).
+const SAMPLE_RESPONSE = {
+  price: 412.5,
+  currency: 'EUR',
+  provider: 'fast-flights',
+  trip: 'round-trip',
+  flights_count: 12,
+};
+
+const ROUND_TRIP: SearchOptions = {
+  trip: 'round-trip', returnDate: '2026-09-24', adults: 2, children: 1, infants: 0, seat: 'economy',
+};
 
 describe('SimulationProvider', () => {
   const provider = new SimulationProvider();
@@ -59,7 +54,7 @@ describe('SimulationProvider', () => {
 
   it('renvoie un prix positif et plausible (>= 15 €)', async () => {
     const at = new Date('2026-07-26T10:00:00Z');
-    const quote = await provider.getPrice('CDG', 'JFK', '2026-12-01', at);
+    const quote = await provider.getPrice('CDG', 'JFK', '2026-12-01', DEFAULT_SEARCH_OPTIONS, at);
     expect(quote.price).toBeGreaterThanOrEqual(15);
     expect(quote.currency).toBe('EUR');
     expect(quote.provider).toBe('simulation');
@@ -72,67 +67,108 @@ describe('SimulationProvider', () => {
     // Sans événement rare, la dernière minute est systématiquement plus chère.
     expect(imminent).toBeGreaterThan(lointain);
   });
-});
 
-describe('extractLowestPrice', () => {
-  it('retourne le montant le plus bas parmi toutes les options', () => {
-    expect(extractLowestPrice(SAMPLE_RESPONSE)).toBe(98.9);
+  it('applique les options de recherche au prix de base simulé', async () => {
+    const at = new Date('2026-07-26T10:00:00Z');
+    const base = simulatePrice('CDG', 'JFK', '2026-12-01', at);
+    const quote = await provider.getPrice('CDG', 'JFK', '2026-12-01', ROUND_TRIP, at);
+    expect(quote.options).toEqual(ROUND_TRIP);
+    expect(quote.price).toBe(applyOptions(base, ROUND_TRIP));
   });
 
-  it('retourne null si la réponse est vide ou sans itinéraire', () => {
-    expect(extractLowestPrice({})).toBeNull();
-    expect(extractLowestPrice({ itineraries: [] })).toBeNull();
-    expect(extractLowestPrice(null)).toBeNull();
+  it('utilise les options par défaut quand aucune n\'est fournie', async () => {
+    const at = new Date('2026-07-26T10:00:00Z');
+    const quote = await provider.getPrice('CDG', 'JFK', '2026-12-01', undefined, at);
+    expect(quote.options).toEqual(DEFAULT_SEARCH_OPTIONS);
+    expect(quote.price).toBe(simulatePrice('CDG', 'JFK', '2026-12-01', at));
   });
 });
 
-describe('FlightApiProvider', () => {
+describe('applyOptions', () => {
+  it('laisse le prix inchangé avec les options par défaut', () => {
+    expect(applyOptions(100, DEFAULT_SEARCH_OPTIONS)).toBe(100);
+  });
+
+  it('majore un aller-retour de ×1.85', () => {
+    expect(applyOptions(100, { ...DEFAULT_SEARCH_OPTIONS, trip: 'round-trip', returnDate: '2026-09-24' })).toBe(185);
+  });
+
+  it('applique les multiplicateurs de cabine', () => {
+    expect(applyOptions(100, { ...DEFAULT_SEARCH_OPTIONS, seat: 'premium-economy' })).toBe(140);
+    expect(applyOptions(100, { ...DEFAULT_SEARCH_OPTIONS, seat: 'business' })).toBe(220);
+    expect(applyOptions(100, { ...DEFAULT_SEARCH_OPTIONS, seat: 'first' })).toBe(320);
+  });
+
+  it('pondère le groupe : adulte ×1, enfant ×0.75, bébé ×0.1', () => {
+    expect(applyOptions(100, { ...DEFAULT_SEARCH_OPTIONS, adults: 2, children: 1, infants: 1 })).toBe(285);
+  });
+
+  it('combine trajet, cabine et groupe, arrondi au centime', () => {
+    const opts: SearchOptions = { trip: 'round-trip', returnDate: '2026-09-24', adults: 1, children: 0, infants: 1, seat: 'first' };
+    // 100 × 1.85 × 3.2 × 1.1 = 651.2
+    expect(applyOptions(100, opts)).toBe(651.2);
+  });
+});
+
+describe('FastFlightsProvider', () => {
   const OLD_ENV = process.env;
 
   beforeEach(() => {
-    process.env = { ...OLD_ENV, FLY_API_KEY: 'test-key-123' };
+    process.env = { ...OLD_ENV, FAST_FLIGHTS_URL: 'http://localhost:8000' };
   });
   afterEach(() => {
     process.env = OLD_ENV;
     vi.restoreAllMocks();
   });
 
-  it('construit l\'URL Oneway Trip conforme à la doc FlightAPI.io', () => {
-    const p = new FlightApiProvider();
-    expect(p.buildUrl('KEY', 'LYS', 'NCE', '2026-09-10')).toBe(
-      'https://api.flightapi.io/onewaytrip/KEY/LYS/NCE/2026-09-10/1/0/0/Economy/EUR'
+  it('construit l\'URL exacte du contrat flights-service (aller simple)', () => {
+    const p = new FastFlightsProvider();
+    expect(p.buildUrl('CDG', 'JFK', '2026-09-10', DEFAULT_SEARCH_OPTIONS)).toBe(
+      'http://localhost:8000/api/v1/search?from_airport=CDG&to_airport=JFK&depart_date=2026-09-10&trip=one-way&adults=1&children=0&infants=0&seat=economy&currency=EUR&language=fr'
     );
   });
 
-  it('renvoie le prix le plus bas de la réponse FlightAPI.io', async () => {
+  it('construit l\'URL exacte du contrat flights-service (aller-retour)', () => {
+    const p = new FastFlightsProvider();
+    expect(p.buildUrl('CDG', 'JFK', '2026-09-10', ROUND_TRIP)).toBe(
+      'http://localhost:8000/api/v1/search?from_airport=CDG&to_airport=JFK&depart_date=2026-09-10&return_date=2026-09-24&trip=round-trip&adults=2&children=1&infants=0&seat=economy&currency=EUR&language=fr'
+    );
+  });
+
+  it('omet return_date en aller simple même si une date est présente', () => {
+    const p = new FastFlightsProvider();
+    const url = p.buildUrl('CDG', 'JFK', '2026-09-10', { ...DEFAULT_SEARCH_OPTIONS, returnDate: '2026-09-24' });
+    expect(url).not.toContain('return_date');
+  });
+
+  it('renvoie le prix total de la réponse flights-service', async () => {
     vi.stubGlobal('fetch', mockFetchJson(SAMPLE_RESPONSE));
-    const quote = await new FlightApiProvider().getPrice('LYS', 'NCE', '2026-09-10');
-    expect(quote).toEqual({ price: 98.9, currency: 'EUR', provider: 'flightapi' });
-    // La clé FLY_API_KEY est bien injectée dans l'URL appelée.
-    expect(vi.mocked(fetch).mock.calls[0][0]).toContain('/onewaytrip/test-key-123/');
+    const quote = await new FastFlightsProvider().getPrice('CDG', 'JFK', '2026-09-10', ROUND_TRIP);
+    expect(quote).toEqual({ price: 412.5, currency: 'EUR', provider: 'fast-flights', options: ROUND_TRIP });
+    expect(vi.mocked(fetch).mock.calls[0][0]).toContain('/api/v1/search?');
   });
 
-  it('lève une erreur explicite si FLY_API_KEY est absente', async () => {
-    delete process.env.FLY_API_KEY;
-    await expect(new FlightApiProvider().getPrice('LYS', 'NCE', '2026-09-10'))
-      .rejects.toThrow(/FLY_API_KEY/);
+  it('lève une erreur explicite si FAST_FLIGHTS_URL est absente', async () => {
+    delete process.env.FAST_FLIGHTS_URL;
+    await expect(new FastFlightsProvider().getPrice('CDG', 'JFK', '2026-09-10'))
+      .rejects.toThrow(/FAST_FLIGHTS_URL/);
   });
 
-  it.each([404, 410])('lève une erreur "aucune offre" sur HTTP %i', async (status) => {
-    vi.stubGlobal('fetch', mockFetchJson({}, status));
-    await expect(new FlightApiProvider().getPrice('LYS', 'NCE', '2026-09-10'))
+  it('lève une erreur "aucune offre" sur HTTP 404', async () => {
+    vi.stubGlobal('fetch', mockFetchJson({}, 404));
+    await expect(new FastFlightsProvider().getPrice('CDG', 'JFK', '2026-09-10'))
       .rejects.toThrow(/aucune offre/);
   });
 
-  it('lève une erreur quota sur HTTP 429', async () => {
-    vi.stubGlobal('fetch', mockFetchJson({}, 429));
-    await expect(new FlightApiProvider().getPrice('LYS', 'NCE', '2026-09-10'))
-      .rejects.toThrow(/429/);
+  it('lève une erreur avec le statut sur HTTP 502 (échec du scraper)', async () => {
+    vi.stubGlobal('fetch', mockFetchJson({}, 502));
+    await expect(new FastFlightsProvider().getPrice('CDG', 'JFK', '2026-09-10'))
+      .rejects.toThrow(/502/);
   });
 
-  it('lève une erreur si la réponse ne contient aucune offre tarifée', async () => {
-    vi.stubGlobal('fetch', mockFetchJson({ itineraries: [] }));
-    await expect(new FlightApiProvider().getPrice('LYS', 'NCE', '2026-09-10'))
+  it.each([{ price: 0 }, { price: -5 }, { price: 'abc' }, {}])('lève une erreur si la réponse est sans offre tarifée : %j', async (body) => {
+    vi.stubGlobal('fetch', mockFetchJson(body));
+    await expect(new FastFlightsProvider().getPrice('CDG', 'JFK', '2026-09-10'))
       .rejects.toThrow(/sans offre/);
   });
 });
@@ -141,14 +177,14 @@ describe('getProvider', () => {
   const OLD_ENV = process.env;
   afterEach(() => { process.env = OLD_ENV; });
 
-  it('sélectionne FlightApiProvider quand FLY_API_KEY est définie', () => {
-    process.env = { ...OLD_ENV, FLY_API_KEY: 'abc' };
-    expect(getProvider().name).toBe('flightapi');
+  it('sélectionne FastFlightsProvider quand FAST_FLIGHTS_URL est définie', () => {
+    process.env = { ...OLD_ENV, FAST_FLIGHTS_URL: 'http://localhost:8000' };
+    expect(getProvider().name).toBe('fast-flights');
   });
 
-  it('retombe sur la simulation sans clé', () => {
+  it('retombe sur la simulation sans URL de service', () => {
     process.env = { ...OLD_ENV };
-    delete process.env.FLY_API_KEY;
+    delete process.env.FAST_FLIGHTS_URL;
     expect(getProvider().name).toBe('simulation');
   });
 });
