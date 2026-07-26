@@ -8,8 +8,7 @@ services:
       - "3000"
     environment:
       - DATA_DIR=/app/data
-      # - AMADEUS_CLIENT_ID=votre_client_id      # optionnel : active le provider Amadeus
-      # - AMADEUS_CLIENT_SECRET=votre_secret
+      # - FLY_API_KEY=votre_cle_flightapi   # optionnel : active le provider FlightAPI.io
     volumes:
       - flydeal-data:/app/data
     restart: unless-stopped

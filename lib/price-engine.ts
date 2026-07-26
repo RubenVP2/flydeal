@@ -2,8 +2,10 @@
 // MOTEUR DE PRIX — couche provider avec interface commune.
 // - SimulationProvider : prix réalistes et DÉTERMINISTES
 //   (seed = route + date) pour faire tourner l'app sans clé API.
-// - AmadeusProvider : stub propre, activé si AMADEUS_CLIENT_ID /
-//   AMADEUS_CLIENT_SECRET présents dans l'environnement.
+// - FlightApiProvider : prix réels via FlightAPI.io
+//   (https://www.flightapi.io/), activé si FLY_API_KEY est
+//   présent dans l'environnement (remplace Amadeus, dont
+//   l'API Developers a été décommissionnée).
 // ============================================================
 import { distanceKm } from './airports';
 
@@ -99,40 +101,60 @@ export class SimulationProvider implements PriceProvider {
   }
 }
 
-// ---------- Provider Amadeus (activé via variables d'env) ----------
-export class AmadeusProvider implements PriceProvider {
-  name = 'amadeus';
-  private token: string | null = null;
-  private tokenExpiry = 0;
+// ---------- Provider FlightAPI.io (activé via FLY_API_KEY) ----------
+// Doc : https://docs.flightapi.io/flight-price-api/oneway-trip-api
+// Endpoint : GET {base}/onewaytrip/{key}/{from}/{to}/{YYYY-MM-DD}/1/0/0/Economy/EUR
+// Réponse : { itineraries: [{ pricing_options: [{ price: { amount } }] }], legs, segments }
+// Codes erreur : 404 pas de vol/utilisateur · 410 timeout · 429 quota dépassé.
+export const FLIGHTAPI_BASE_URL = 'https://api.flightapi.io';
 
-  private async getToken(): Promise<string> {
-    if (this.token && Date.now() < this.tokenExpiry) return this.token;
-    const res = await fetch('https://test.api.amadeus.com/v1/security/oauth2/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `grant_type=client_credentials&client_id=${process.env.AMADEUS_CLIENT_ID}&client_secret=${process.env.AMADEUS_CLIENT_SECRET}`,
-    });
-    if (!res.ok) throw new Error('Amadeus auth failed');
-    const data = await res.json();
-    this.token = data.access_token;
-    this.tokenExpiry = Date.now() + (data.expires_in - 60) * 1000;
-    return this.token!;
+/**
+ * Extrait le prix le plus bas (€) d'une réponse Oneway Trip de FlightAPI.io.
+ * Parcourt tous les itinéraires × options de prix ; ignore les montants invalides.
+ */
+export function extractLowestPrice(data: any): number | null {
+  const amounts: number[] = [];
+  for (const itin of data?.itineraries ?? []) {
+    for (const opt of itin?.pricing_options ?? []) {
+      const amount = Number(opt?.price?.amount);
+      if (Number.isFinite(amount) && amount > 0) amounts.push(amount);
+    }
+  }
+  return amounts.length ? Math.min(...amounts) : null;
+}
+
+export class FlightApiProvider implements PriceProvider {
+  name = 'flightapi';
+  private baseUrl: string;
+
+  constructor(baseUrl: string = FLIGHTAPI_BASE_URL) {
+    this.baseUrl = baseUrl;
+  }
+
+  buildUrl(apiKey: string, origin: string, destination: string, departDate: string): string {
+    return `${this.baseUrl}/onewaytrip/${apiKey}/${origin}/${destination}/${departDate}/1/0/0/Economy/EUR`;
   }
 
   async getPrice(origin: string, destination: string, departDate: string): Promise<PriceQuote> {
-    const token = await this.getToken();
-    const url = `https://test.api.amadeus.com/v2/shopping/flight-offers?originLocationCode=${origin}&destinationLocationCode=${destination}&departureDate=${departDate}&adults=1&nonStop=false&max=5&currencyCode=EUR`;
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) throw new Error(`Amadeus offers failed: ${res.status}`);
+    const apiKey = process.env.FLY_API_KEY;
+    if (!apiKey) throw new Error('FlightAPI: FLY_API_KEY manquante dans l\'environnement');
+
+    const res = await fetch(this.buildUrl(apiKey, origin, destination, departDate), {
+      signal: AbortSignal.timeout(30000),
+    });
+    if (res.status === 429) throw new Error('FlightAPI: quota dépassé (429) — ralentir la cadence ou upgrader le plan');
+    if (res.status === 404 || res.status === 410) throw new Error(`FlightAPI: aucune offre pour ${origin}-${destination} le ${departDate} (${res.status})`);
+    if (!res.ok) throw new Error(`FlightAPI offers failed: ${res.status}`);
+
     const data = await res.json();
-    const prices = (data.data || []).map((o: any) => parseFloat(o.price?.grandTotal)).filter((p: number) => p > 0);
-    if (!prices.length) throw new Error('Amadeus: no offers');
-    return { price: Math.min(...prices), currency: 'EUR', provider: this.name };
+    const price = extractLowestPrice(data);
+    if (price === null) throw new Error('FlightAPI: réponse sans offre tarifée');
+    return { price, currency: 'EUR', provider: this.name };
   }
 }
 
-// Sélection du provider actif : Amadeus si clés présentes, sinon simulation.
+// Sélection du provider actif : FlightAPI si FLY_API_KEY présente, sinon simulation.
 export function getProvider(): PriceProvider {
-  if (process.env.AMADEUS_CLIENT_ID && process.env.AMADEUS_CLIENT_SECRET) return new AmadeusProvider();
+  if (process.env.FLY_API_KEY) return new FlightApiProvider();
   return new SimulationProvider();
 }

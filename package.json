@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "npx --yes vitest@2 run"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",
