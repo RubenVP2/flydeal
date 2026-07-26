@@ -3,10 +3,10 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 RUN apk add --no-cache python3 make g++   # build better-sqlite3 si pas de prebuilt
 COPY package.json package-lock.json* ./
-# Install robuste : retries réseau, pas de fallback silencieux, vérification explicite.
-# "npm error Exit handler never called!" = crash interne npm (souvent mémoire/réseau) :
-# on nettoie le cache et on retente, et on ÉCHOUE le build si next n'est pas installé.
-RUN npm config set fetch-retries 5 \
+# npm 10.8.2 (embarqué dans node:20-alpine) crashe avec "Exit handler never called!"
+# sur VPS à faible RAM → on met à jour npm AVANT l'install (bug corrigé dans npm 11).
+RUN npm install -g npm@11 --no-audit --no-fund \
+ && npm config set fetch-retries 5 \
  && npm config set fetch-retry-maxtimeout 120000 \
  && npm config set maxsockets 3 \
  && (npm ci --no-audit --no-fund --loglevel=error \
@@ -16,7 +16,7 @@ RUN npm config set fetch-retries 5 \
  && test -x node_modules/.bin/next \
  && test -d node_modules/better-sqlite3
 COPY . .
-ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_TELEMETRY_DISABLED=1 NODE_OPTIONS=--max-old-space-size=1536
 RUN npm run build
 
 # ---- Runtime ----
