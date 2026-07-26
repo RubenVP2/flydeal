@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - DATA_DIR=/app/data
+      # - AMADEUS_CLIENT_ID=votre_client_id      # optionnel : active le provider Amadeus
+      # - AMADEUS_CLIENT_SECRET=votre_secret
+    volumes:
+      - flydeal-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  flydeal-data:
