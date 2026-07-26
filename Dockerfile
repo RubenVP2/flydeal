@@ -5,7 +5,11 @@ RUN apk add --no-cache python3 make g++   # build better-sqlite3 si pas de prebu
 COPY package.json package-lock.json* ./
 # npm 10.8.2 (embarqué dans node:20-alpine) crashe avec "Exit handler never called!"
 # sur VPS à faible RAM → on met à jour npm AVANT l'install (bug corrigé dans npm 11).
-RUN npm install -g npm@11 --no-audit --no-fund \
+# On épingle le registry officiel et on réécrit les URLs "resolved" du lockfile
+# au cas où il aurait été généré derrière un miroir privé inaccessible.
+RUN npm config set registry https://registry.npmjs.org/ \
+ && sed -i 's#https://npm\.mirrors\.msh\.team/#https://registry.npmjs.org/#g' package-lock.json \
+ && npm install -g npm@11 --no-audit --no-fund \
  && npm config set fetch-retries 5 \
  && npm config set fetch-retry-maxtimeout 120000 \
  && npm config set maxsockets 3 \
