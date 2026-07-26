@@ -7,6 +7,7 @@ import { computeDealScore } from '@/lib/deal-score';
 import { computeTactics } from '@/lib/tactics';
 import { distanceKm } from '@/lib/airports';
 import { simulatePrice } from '@/lib/price-engine';
+import { groupPricesBySeries, getPrimarySeriesPoints, primarySeriesKey } from '@/lib/series';
 import PriceHistoryChart from '@/components/PriceHistoryChart';
 import VerdictPanel from '@/components/VerdictPanel';
 import TacticsPanel from '@/components/TacticsPanel';
@@ -37,18 +38,36 @@ export default function WatchDetail({ params }: { params: { id: string } }) {
   if (!w) notFound();
   const prices = getPrices(w.id);
   const km = distanceKm(w.origins[0], w.destinations[0]);
-  const currentPrice = prices.length ? prices[prices.length - 1].price : simulatePrice(w.origins[0], w.destinations[0], w.depart_date);
-  const score = computeDealScore({ currentPrice, history: prices, distanceKm: km, departDate: w.depart_date });
+
+  // Score et prix actuel : calculés UNIQUEMENT sur la série principale
+  // (1er aéroport de départ → 1er d'arrivée, date cible). Mélanger les
+  // relevés des routes/dates flexibles fausserait moyenne et percentile.
+  const primary = getPrimarySeriesPoints(w, prices);
+  const currentPrice = primary.length
+    ? primary[primary.length - 1].price
+    : simulatePrice(w.origins[0], w.destinations[0], w.depart_date);
+  const score = computeDealScore({ currentPrice, history: primary, distanceKm: km, departDate: w.depart_date });
   const tactics = computeTactics(w, prices, currentPrice);
-  const stats = prices.length ? {
-    min: Math.min(...prices.map(p => p.price)),
-    max: Math.max(...prices.map(p => p.price)),
-    avg: Math.round(prices.reduce((s, p) => s + p.price, 0) / prices.length),
-  } : null;
-  // Fenêtre graphique : 30 derniers jours. Les stats ci-dessus restent
-  // calculées sur TOUT l'historique (min/max tous temps confondus).
+
+  // Séries pour le graphique : fenêtre 30 derniers jours par série,
+  // minimum toutes périodes pour la ligne de référence. Le graphique
+  // démarre au premier relevé réel — aucune donnée passée fabriquée.
   const cutoff = Date.now() - 30 * 86400000;
-  const chartPrices = prices.filter(p => new Date(p.checked_at.replace(' ', 'T') + 'Z').getTime() >= cutoff);
+  const pKey = primarySeriesKey(w);
+  const chartSeries = groupPricesBySeries(prices, pKey)
+    .map(s => {
+      const windowPts = s.points.filter(p => new Date(p.checked_at.replace(' ', 'T') + 'Z').getTime() >= cutoff);
+      return {
+        key: s.key,
+        origin: s.origin,
+        destination: s.destination,
+        departDate: s.departDate,
+        points: (windowPts.length ? windowPts : s.points.slice(-1)).map(p => ({ checked_at: p.checked_at, price: p.price })),
+        allTimeMin: Math.min(...s.points.map(p => p.price)),
+        totalPoints: s.points.length,
+      };
+    })
+    .filter(s => s.points.length > 0);
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -66,24 +85,17 @@ export default function WatchDetail({ params }: { params: { id: string } }) {
       <VerdictPanel score={score} />
 
       <div className="card">
-        <div className="flex items-baseline justify-between mb-4 flex-wrap gap-2">
-          <h2 className="font-semibold">Historique du prix <span className="text-xs font-normal opacity-50">(30 derniers jours)</span></h2>
-          {stats && (
-            <p className="text-xs opacity-60">
-              Min <span className="text-[#30D158] font-semibold">{stats.min.toFixed(0)} €</span> ·
-              Moy <span className="font-semibold"> {stats.avg} €</span> ·
-              Max <span className="text-[#FF453A] font-semibold"> {stats.max.toFixed(0)} €</span> ·
-              Actuel <span className="font-semibold"> {currentPrice.toFixed(0)} €</span>
-            </p>
-          )}
-        </div>
-        {chartPrices.length > 1
-          ? <PriceHistoryChart prices={chartPrices} allTimeMin={stats?.min} />
-          : <p className="text-sm opacity-50 py-10 text-center">Pas encore assez de relevés — l'historique se construit depuis le lancement de la surveillance.</p>}
+        <h2 className="font-semibold mb-4">Historique du prix <span className="text-xs font-normal opacity-50">(30 derniers jours)</span></h2>
+        {chartSeries.length
+          ? <PriceHistoryChart series={chartSeries} />
+          : <p className="text-sm opacity-50 py-10 text-center">Pas encore de relevé — l'historique se construit à partir de la première vérification de la surveillance.</p>}
       </div>
 
       <div>
-        <h2 className="font-semibold mb-3">Tactiques de contournement</h2>
+        <h2 className="font-semibold mb-1">Tactiques de contournement</h2>
+        <p className="text-xs opacity-50 mb-3">
+          Les montants marqués « Données mesurées » sont calculés à partir de vos relevés enregistrés. Les tactiques marquées « Méthode » expliquent une pratique documentée, sans chiffre projeté.
+        </p>
         <TacticsPanel tactics={tactics} />
       </div>
 

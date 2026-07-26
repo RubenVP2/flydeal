@@ -5,6 +5,7 @@ import { ensureInitialized } from '@/lib/init';
 import { computeDealScore } from '@/lib/deal-score';
 import { distanceKm } from '@/lib/airports';
 import { simulatePrice } from '@/lib/price-engine';
+import { getPrimarySeriesPoints } from '@/lib/series';
 import ScoreGauge from '@/components/ScoreGauge';
 import Sparkline from '@/components/Sparkline';
 import DeleteButton from '@/components/DeleteButton';
@@ -47,10 +48,13 @@ export default function Dashboard() {
   const watches = listWatches();
   const rows = watches.map(w => {
     const prices = getPrices(w.id);
-    const currentPrice = prices.length ? prices[prices.length - 1].price
+    // Prix courant, score et sparkline : série principale uniquement,
+    // pour ne pas mélanger des relevés de routes/dates différentes.
+    const primary = getPrimarySeriesPoints(w, prices);
+    const currentPrice = primary.length ? primary[primary.length - 1].price
       : simulatePrice(w.origins[0], w.destinations[0], w.depart_date);
-    const score = computeDealScore({ currentPrice, history: prices, distanceKm: distanceKm(w.origins[0], w.destinations[0]), departDate: w.depart_date });
-    return { w, prices, currentPrice, score };
+    const score = computeDealScore({ currentPrice, history: primary, distanceKm: distanceKm(w.origins[0], w.destinations[0]), departDate: w.depart_date });
+    return { w, primary, currentPrice, score };
   });
 
   return (
@@ -73,9 +77,9 @@ export default function Dashboard() {
       )}
 
       <div className="grid gap-4 sm:grid-cols-2">
-        {rows.map(({ w, prices, currentPrice, score }) => {
+        {rows.map(({ w, primary, currentPrice, score }) => {
           const v = VERDICT[score.verdict];
-          const spark = prices.slice(-30).map(p => p.price);
+          const spark = primary.slice(-30).map(p => p.price);
           return (
             <div key={w.id} className="card relative group hover:shadow-lg transition-shadow">
               <Link href={`/surveillance/${w.id}`} className="block">

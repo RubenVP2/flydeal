@@ -4,6 +4,7 @@ import { listWatches, getPrices } from '@/lib/db';
 import { ensureInitialized } from '@/lib/init';
 import { computeTactics } from '@/lib/tactics';
 import { simulatePrice } from '@/lib/price-engine';
+import { getPrimarySeriesPoints } from '@/lib/series';
 import TacticsPanel from '@/components/TacticsPanel';
 
 export const dynamic = 'force-dynamic';
@@ -30,7 +31,8 @@ export default function ContournementsPage() {
       )}
       {watches.map(w => {
         const prices = getPrices(w.id);
-        const current = prices.length ? prices[prices.length - 1].price : simulatePrice(w.origins[0], w.destinations[0], w.depart_date);
+        const primary = getPrimarySeriesPoints(w, prices);
+        const current = primary.length ? primary[primary.length - 1].price : simulatePrice(w.origins[0], w.destinations[0], w.depart_date);
         const tactics = computeTactics(w, prices, current);
         return (
           <section key={w.id}>
