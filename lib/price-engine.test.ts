@@ -4,8 +4,9 @@
 //  1. SimulationProvider : déterminisme, plausibilité, rampe yield.
 //  2. applyOptions() : multiplicateurs trajet / cabine / groupe.
 //  3. FastFlightsProvider : construction d'URL conforme au contrat
-//     du microservice flights-service, happy path (fetch mocké) et
-//     gestion des erreurs (404, 502, réponse sans prix, URL absente).
+//     du microservice flights-service, happy path (fetch mocké),
+//     parsing du bloc `details` et gestion des erreurs (404, 502,
+//     réponse sans prix, URL absente).
 //  4. getProvider() : sélection fast-flights vs simulation selon
 //     FAST_FLIGHTS_URL.
 // Lancer : npm test
@@ -17,6 +18,7 @@ import {
   simulatePrice,
   applyOptions,
   getProvider,
+  parseFlightDetails,
   DEFAULT_SEARCH_OPTIONS,
   SearchOptions,
 } from './price-engine';
@@ -36,6 +38,27 @@ const SAMPLE_RESPONSE = {
   provider: 'fast-flights',
   trip: 'round-trip',
   flights_count: 12,
+};
+
+// Bloc `details` conforme au schéma flights-service (snake_case).
+const SAMPLE_DETAILS = {
+  airlines: ['Air France'],
+  type: 'best',
+  stops: 0,
+  total_duration_min: 465,
+  legs: [
+    {
+      from_code: 'CDG',
+      from_name: 'Paris Charles de Gaulle',
+      to_code: 'JFK',
+      to_name: 'New York John F. Kennedy',
+      departure: '2026-09-10T10:35',
+      arrival: '2026-09-10T13:20',
+      duration_min: 465,
+      plane_type: 'Boeing 777-300ER',
+    },
+  ],
+  carbon: { emission_g: 750000, typical_g: 900000 },
 };
 
 const ROUND_TRIP: SearchOptions = {
@@ -110,6 +133,42 @@ describe('applyOptions', () => {
   });
 });
 
+describe('parseFlightDetails', () => {
+  it('normalise le bloc details de flights-service en camelCase', () => {
+    const d = parseFlightDetails(SAMPLE_DETAILS)!;
+    expect(d.airlines).toEqual(['Air France']);
+    expect(d.stops).toBe(0);
+    expect(d.totalDurationMin).toBe(465);
+    expect(d.legs).toHaveLength(1);
+    expect(d.legs[0]).toEqual({
+      fromCode: 'CDG',
+      fromName: 'Paris Charles de Gaulle',
+      toCode: 'JFK',
+      toName: 'New York John F. Kennedy',
+      departure: '2026-09-10T10:35',
+      arrival: '2026-09-10T13:20',
+      durationMin: 465,
+      planeType: 'Boeing 777-300ER',
+    });
+    expect(d.carbon).toEqual({ emissionG: 750000, typicalG: 900000 });
+  });
+
+  it('déduit stops et durée totale des segments si absents', () => {
+    const d = parseFlightDetails({
+      legs: [
+        { from_code: 'CDG', from_name: 'Paris', to_code: 'MAD', to_name: 'Madrid', duration_min: 110 },
+        { from_code: 'MAD', from_name: 'Madrid', to_code: 'BOG', to_name: 'Bogota', duration_min: 590 },
+      ],
+    })!;
+    expect(d.stops).toBe(1);
+    expect(d.totalDurationMin).toBe(700);
+  });
+
+  it.each([null, undefined, {}, { legs: [], airlines: [] }, 'x'])('renvoie null sans contenu exploitable : %j', (raw) => {
+    expect(parseFlightDetails(raw)).toBeNull();
+  });
+});
+
 describe('FastFlightsProvider', () => {
   const OLD_ENV = process.env;
 
@@ -146,6 +205,20 @@ describe('FastFlightsProvider', () => {
     const quote = await new FastFlightsProvider().getPrice('CDG', 'JFK', '2026-09-10', ROUND_TRIP);
     expect(quote).toEqual({ price: 412.5, currency: 'EUR', provider: 'fast-flights', options: ROUND_TRIP });
     expect(vi.mocked(fetch).mock.calls[0][0]).toContain('/api/v1/search?');
+  });
+
+  it('joint les détails du vol quand flights-service les fournit', async () => {
+    vi.stubGlobal('fetch', mockFetchJson({ ...SAMPLE_RESPONSE, details: SAMPLE_DETAILS }));
+    const quote = await new FastFlightsProvider().getPrice('CDG', 'JFK', '2026-09-10', ROUND_TRIP);
+    expect(quote.details?.airlines).toEqual(['Air France']);
+    expect(quote.details?.legs[0].planeType).toBe('Boeing 777-300ER');
+    expect(quote.details?.stops).toBe(0);
+  });
+
+  it('ignore silencieusement un bloc details inexploitable', async () => {
+    vi.stubGlobal('fetch', mockFetchJson({ ...SAMPLE_RESPONSE, details: 'corrompu' }));
+    const quote = await new FastFlightsProvider().getPrice('CDG', 'JFK', '2026-09-10', ROUND_TRIP);
+    expect(quote.details).toBeUndefined();
   });
 
   it('lève une erreur explicite si FAST_FLIGHTS_URL est absente', async () => {

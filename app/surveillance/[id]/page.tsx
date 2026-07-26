@@ -50,8 +50,9 @@ export default function WatchDetail({ params }: { params: { id: string } }) {
   const tactics = computeTactics(w, prices, currentPrice);
 
   // Points pour la heatmap : fenêtre des 30 derniers jours de relevés,
-  // toutes séries confondues (routes × dates flexibles). Les séries sont
-  // ordonnées principale d'abord — la heatmap garde cet ordre de lignes.
+  // toutes séries confondues (routes × dates flexibles), avec le détail
+  // du vol mesuré quand le backend l'a fourni. Les séries sont ordonnées
+  // principale d'abord — la heatmap garde cet ordre de lignes.
   // Aucune donnée passée fabriquée : seuls les relevés mesurés.
   const cutoff = Date.now() - 30 * 86400000;
   const pKey = primarySeriesKey(w);
@@ -64,6 +65,7 @@ export default function WatchDetail({ params }: { params: { id: string } }) {
       departDate: p.depart_date,
       price: p.price,
       checkedAt: p.checked_at,
+      details: p.details,
     }));
 
   return (
@@ -82,7 +84,7 @@ export default function WatchDetail({ params }: { params: { id: string } }) {
       <VerdictPanel score={score} />
 
       <div className="card">
-        <h2 className="font-semibold mb-4">Prix par route et date <span className="text-xs font-normal opacity-50">(dates flexibles · 30 derniers jours · faites défiler →)</span></h2>
+        <h2 className="font-semibold mb-4">Prix par route et date <span className="text-xs font-normal opacity-50">(dates flexibles · 30 derniers jours · touchez une cellule pour le détail)</span></h2>
         {heatmapPoints.length
           ? <PriceHeatmap points={heatmapPoints} />
           : <p className="text-sm opacity-50 py-10 text-center">Pas encore de relevé — la heatmap se construit à partir de la première vérification de la surveillance.</p>}

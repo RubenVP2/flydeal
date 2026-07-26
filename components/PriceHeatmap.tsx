@@ -1,5 +1,8 @@
 'use client';
+import { useState } from 'react';
 import { PlaneTakeoff, PlaneLanding, Trophy } from 'lucide-react';
+import type { FlightDetails } from '@/lib/price-engine';
+import PriceCellModal, { PriceCellSelection } from './PriceCellModal';
 
 // ============================================================
 // HEATMAP PRIX — routes × dates de départ (type « dates
@@ -8,8 +11,10 @@ import { PlaneTakeoff, PlaneLanding, Trophy } from 'lucide-react';
 // cellule = dernier prix RÉELLEMENT mesuré sur les 30 derniers
 // jours pour ce couple route × date. Échelle de couleur :
 // vert = bon plan (min de la fenêtre), rouge = cher (max).
-// La grille défile horizontalement pour parcourir toutes les
-// dates, la colonne des routes reste collée à gauche. Aucune
+// La grille défile horizontalement, la colonne des routes reste
+// collée à gauche. CLIC sur une cellule → popup détaillée :
+// vol mesuré (compagnies, horaires, escales, appareil, CO₂),
+// historique de la cellule et lien Google Flights. Aucune
 // donnée fabriquée : les cellules sans relevé restent vides.
 // ============================================================
 
@@ -19,6 +24,7 @@ export interface HeatmapPoint {
   departDate: string; // YYYY-MM-DD
   price: number;
   checkedAt: string;  // relevé UTC ("YYYY-MM-DD HH:MM:SS" ou ISO)
+  details?: FlightDetails | null; // détail backend du vol mesuré
 }
 
 interface Cell { price: number; checkedAt: string }
@@ -40,6 +46,9 @@ function heatColor(t: number): string {
 }
 
 export default function PriceHeatmap({ points }: { points: HeatmapPoint[] }) {
+  // Cellule ouverte en popup (route + date), null = fermée.
+  const [selected, setSelected] = useState<{ rowKey: string; date: string } | null>(null);
+
   // points arrivent triés par série (principale d'abord) puis
   // chronologiquement : la ligne garde l'ordre d'arrivée, et la
   // cellule conserve le DERNIER relevé (le plus récent écrase).
@@ -71,6 +80,26 @@ export default function PriceHeatmap({ points }: { points: HeatmapPoint[] }) {
     if (c.price === min && !best) {
       const sep = k.lastIndexOf('::');
       best = { rowKey: k.slice(0, sep), date: k.slice(sep + 2), price: c.price };
+    }
+  }
+
+  // Sélection courante → objet complet pour la popup (historique
+  // chronologique du couple route × date + détail du dernier relevé).
+  let selection: PriceCellSelection | null = null;
+  if (selected) {
+    const row = rows.find(r => r.key === selected.rowKey);
+    if (row) {
+      const cellPoints = points
+        .filter(p => `${p.origin}|${p.destination}` === selected.rowKey && p.departDate === selected.date)
+        .map(p => ({ price: p.price, checkedAt: p.checkedAt, details: p.details ?? null }));
+      if (cellPoints.length) {
+        selection = {
+          origin: row.origin,
+          destination: row.destination,
+          departDate: selected.date,
+          points: cellPoints,
+        };
+      }
     }
   }
 
@@ -137,16 +166,18 @@ export default function PriceHeatmap({ points }: { points: HeatmapPoint[] }) {
                   const t = (c.price - min) / span;
                   const isBest = best !== null && r.key === best.rowKey && d === best.date;
                   return (
-                    <div
+                    <button
                       key={d}
-                      title={`${r.origin} → ${r.destination} · départ ${LONG_FMT.format(new Date(d + 'T12:00:00Z'))} : ${c.price.toFixed(0)} € (relevé le ${fmtChecked(c.checkedAt)})`}
-                      className={`w-[76px] h-12 shrink-0 flex items-center justify-center text-[13px] font-semibold text-white cursor-default transition-transform duration-100 hover:scale-[1.08] hover:rounded-md ${
+                      type="button"
+                      onClick={() => setSelected({ rowKey: r.key, date: d })}
+                      title={`${r.origin} → ${r.destination} · départ ${LONG_FMT.format(new Date(d + 'T12:00:00Z'))} : ${c.price.toFixed(0)} € (relevé le ${fmtChecked(c.checkedAt)}) — cliquer pour le détail`}
+                      className={`w-[76px] h-12 shrink-0 flex items-center justify-center text-[13px] font-semibold text-white cursor-pointer transition-transform duration-100 hover:scale-[1.08] hover:rounded-md hover:shadow-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${
                         isBest ? 'ring-2 ring-inset ring-white/90' : ''
                       }`}
                       style={{ background: heatColor(t), textShadow: '0 1px 2px rgba(0,0,0,.35)' }}
                     >
                       {c.price.toFixed(0)}&nbsp;€
-                    </div>
+                    </button>
                   );
                 })}
               </div>
@@ -160,8 +191,11 @@ export default function PriceHeatmap({ points }: { points: HeatmapPoint[] }) {
       <p className="text-[11px] opacity-40 mt-2">
         {points.length} relevé{points.length > 1 ? 's' : ''} mesuré{points.length > 1 ? 's' : ''} sur les 30 derniers jours
         — chaque cellule affiche le dernier prix mesuré pour un couple route × date de départ.
-        Les cellules « – » n'ont pas encore de relevé : aucun historique n'est fabriqué.
+        Touchez une cellule pour le détail du vol. Les cellules « – » n'ont pas encore de relevé.
       </p>
+
+      {/* Popup détaillée de la cellule sélectionnée. */}
+      {selection && <PriceCellModal cell={selection} onClose={() => setSelected(null)} />}
     </div>
   );
 }
