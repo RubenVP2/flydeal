@@ -1,8 +1,11 @@
 services:
   app:
     build: .
-    ports:
-      - "3000:3000"
+    # Pas de "ports:" ici : Dokploy route le trafic vers le port 3000 du
+    # conteneur via son proxy (Traefik). Publier 3000:3000 sur l'hôte
+    # entre en conflit avec le service qui occupe déjà ce port.
+    expose:
+      - "3000"
     environment:
       - DATA_DIR=/app/data
       # - AMADEUS_CLIENT_ID=votre_client_id      # optionnel : active le provider Amadeus
