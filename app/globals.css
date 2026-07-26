@@ -1,0 +1,18 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: light; }
+.dark { color-scheme: dark; }
+
+body {
+  @apply bg-[#F5F5F7] text-[#1D1D1F] antialiased;
+}
+.dark body { @apply bg-[#000] text-[#F5F5F7]; }
+
+.glass {
+  @apply bg-white/70 backdrop-blur-xl border border-black/5 shadow-[0_4px_24px_rgba(0,0,0,0.06)];
+}
+.dark .glass { @apply bg-[#1C1C1E]/70 border-white/10 shadow-[0_4px_24px_rgba(0,0,0,0.4)]; }
+
+.card { @apply glass rounded-2xl p-5 sm:p-6; }
