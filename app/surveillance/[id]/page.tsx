@@ -45,6 +45,10 @@ export default function WatchDetail({ params }: { params: { id: string } }) {
     max: Math.max(...prices.map(p => p.price)),
     avg: Math.round(prices.reduce((s, p) => s + p.price, 0) / prices.length),
   } : null;
+  // Fenêtre graphique : 30 derniers jours. Les stats ci-dessus restent
+  // calculées sur TOUT l'historique (min/max tous temps confondus).
+  const cutoff = Date.now() - 30 * 86400000;
+  const chartPrices = prices.filter(p => new Date(p.checked_at.replace(' ', 'T') + 'Z').getTime() >= cutoff);
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -63,7 +67,7 @@ export default function WatchDetail({ params }: { params: { id: string } }) {
 
       <div className="card">
         <div className="flex items-baseline justify-between mb-4 flex-wrap gap-2">
-          <h2 className="font-semibold">Historique du prix</h2>
+          <h2 className="font-semibold">Historique du prix <span className="text-xs font-normal opacity-50">(30 derniers jours)</span></h2>
           {stats && (
             <p className="text-xs opacity-60">
               Min <span className="text-[#30D158] font-semibold">{stats.min.toFixed(0)} €</span> ·
@@ -73,7 +77,9 @@ export default function WatchDetail({ params }: { params: { id: string } }) {
             </p>
           )}
         </div>
-        {prices.length > 1 ? <PriceHistoryChart prices={prices} /> : <p className="text-sm opacity-50 py-10 text-center">Pas encore assez de relevés.</p>}
+        {chartPrices.length > 1
+          ? <PriceHistoryChart prices={chartPrices} allTimeMin={stats?.min} />
+          : <p className="text-sm opacity-50 py-10 text-center">Pas encore assez de relevés — l'historique se construit depuis le lancement de la surveillance.</p>}
       </div>
 
       <div>

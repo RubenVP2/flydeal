@@ -1,7 +1,8 @@
 // ============================================================
 // TESTS — seed de démonstration (lib/seed.ts)
 // Vérifie : insertion de 3 surveillances de démo sur base vide
-// (dont une aller-retour 2 adultes), historique de prix généré,
+// (dont une aller-retour 2 adultes), AUCUN historique de prix
+// fabriqué (les relevés démarrent au jour J, via le scheduler),
 // et no-op sur base déjà remplie.
 // Lancer : npm test
 // ============================================================
@@ -40,9 +41,10 @@ describe('seedIfEmpty', () => {
     expect(rt!.adults).toBe(2);
     expect(rt!.return_date).not.toBeNull();
     expect(rt!.return_date! > rt!.depart_date).toBe(true);
-    // Historique de prix généré et prochaine vérification planifiée.
+    // Aucun historique fabriqué : les relevés démarrent au jour J
+    // (premier passage du scheduler). Prochaine vérification planifiée.
     for (const w of watches) {
-      expect(db.getPrices(w.id).length).toBeGreaterThan(0);
+      expect(db.getPrices(w.id)).toHaveLength(0);
       expect(w.next_check_at).toBeTruthy();
     }
   });

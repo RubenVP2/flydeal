@@ -159,4 +159,46 @@ describe('db — migration du schéma', () => {
     expect(w.adults).toBe(1);
     expect(w.seat).toBe('economy');
   });
+
+  it('purge les relevés de prix antérieurs à la création de la surveillance', async () => {
+    // Base existante avec un historique "passé" fabriqué (ancien seed).
+    const dir = freshDir();
+    fs.mkdirSync(dir, { recursive: true });
+    const old = new Database(path.join(dir, 'flydeal.db'));
+    old.exec(`
+      CREATE TABLE watches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        origins TEXT NOT NULL,
+        destinations TEXT NOT NULL,
+        depart_date TEXT NOT NULL,
+        flex_days INTEGER NOT NULL DEFAULT 3,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_checked_at TEXT,
+        next_check_at TEXT
+      );
+      CREATE TABLE prices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        watch_id INTEGER NOT NULL REFERENCES watches(id) ON DELETE CASCADE,
+        origin TEXT NOT NULL,
+        destination TEXT NOT NULL,
+        depart_date TEXT NOT NULL,
+        price REAL NOT NULL,
+        checked_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO watches (origins, destinations, depart_date, flex_days, created_at)
+        VALUES ('["CDG"]', '["JFK"]', '2026-09-10', 3, '2026-07-20 00:00:00');
+      -- Relevé fabriqué AVANT la création → doit être purgé.
+      INSERT INTO prices (watch_id, origin, destination, depart_date, price, checked_at)
+        VALUES (1, 'CDG', 'JFK', '2026-09-10', 350.5, '2026-07-01 03:00:00');
+      -- Relevé réel APRÈS la création → conservé.
+      INSERT INTO prices (watch_id, origin, destination, depart_date, price, checked_at)
+        VALUES (1, 'CDG', 'JFK', '2026-09-10', 342.1, '2026-07-21 03:00:00');
+    `);
+    old.close();
+
+    const db = await loadDb(dir);
+    const prices = db.getPrices(1);
+    expect(prices).toHaveLength(1);
+    expect(prices[0].price).toBe(342.1);
+  });
 });

@@ -1,7 +1,9 @@
-// Seed de démonstration : 3 surveillances avec 30 jours d'historique simulé,
-// insérées uniquement si la base est vide.
-import { db, createWatch, addPrice, setNextCheck, Watch } from './db';
-import { simulatePrice, SearchOptions, DEFAULT_SEARCH_OPTIONS } from './price-engine';
+// Seed de démonstration : 3 surveillances insérées uniquement si la base
+// est vide. AUCUN historique de prix n'est fabriqué : les relevés démarrent
+// au jour J (premier passage du scheduler), car le backend flights-service
+// ne fournit pas de données historiques — seulement le prix courant.
+import { db, createWatch, setNextCheck, Watch } from './db';
+import { SearchOptions, DEFAULT_SEARCH_OPTIONS } from './price-engine';
 import { nextCheckTime } from './scheduler';
 
 export function seedIfEmpty(): void {
@@ -26,19 +28,6 @@ export function seedIfEmpty(): void {
 
   for (const d of demos) {
     const w: Watch = createWatch(d.origins, d.destinations, d.date, d.flex, d.options ?? DEFAULT_SEARCH_OPTIONS);
-    // 30 jours d'historique : 2 relevés/jour sur la route principale + dates flex.
-    for (let day = 30; day >= 0; day--) {
-      for (const hour of [3, 15]) {
-        const at = new Date(now.getTime() - day * 86400000);
-        at.setHours(hour, Math.floor(Math.random() * 50), 0, 0);
-        const iso = at.toISOString().replace('T', ' ').slice(0, 19);
-        for (const o of d.origins) {
-          for (const dst of d.destinations) {
-            addPrice(w.id, o, dst, d.date, simulatePrice(o, dst, d.date, at), iso);
-          }
-        }
-      }
-    }
     setNextCheck(w.id, nextCheckTime(w).toISOString());
   }
   console.log('[flydeal] base seedée avec 3 surveillances de démonstration');

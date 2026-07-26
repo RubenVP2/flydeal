@@ -4,13 +4,15 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceL
 interface Point { checked_at: string; price: number }
 
 // Graphique complet de l'historique de prix (recharts AreaChart).
-export default function PriceHistoryChart({ prices }: { prices: Point[] }) {
+// `prices` est la fenêtre affichée (30 derniers jours) ; `allTimeMin` est le
+// minimum toutes périodes confondues, tracé en ligne de référence.
+export default function PriceHistoryChart({ prices, allTimeMin }: { prices: Point[]; allTimeMin?: number }) {
   const data = prices.map(p => ({
     date: p.checked_at.slice(5, 10),
     time: p.checked_at.slice(5, 16).replace('T', ' '),
     price: p.price,
   }));
-  const min = Math.min(...prices.map(p => p.price));
+  const min = allTimeMin ?? Math.min(...prices.map(p => p.price));
   return (
     <div className="h-64 w-full">
       <ResponsiveContainer width="100%" height="100%">

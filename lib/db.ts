@@ -60,6 +60,17 @@ for (const [col, def] of WATCH_OPTION_COLUMNS) {
   if (!existing.has(col)) db.exec(`ALTER TABLE watches ADD COLUMN ${col} ${def}`);
 }
 
+// Migration idempotente : purge les relevés de prix datés AVANT la création
+// de leur surveillance. Ces lignes sont nécessairement fabriquées (ancien
+// seed qui simulait 30 jours d'historique) : un relevé réel est toujours
+// postérieur à la création de la surveillance. L'historique démarre au
+// jour J, le backend ne fournissant pas de données passées.
+db.exec(`
+DELETE FROM prices WHERE checked_at < (
+  SELECT created_at FROM watches WHERE watches.id = prices.watch_id
+);
+`);
+
 export interface Watch {
   id: number;
   origins: string[];
