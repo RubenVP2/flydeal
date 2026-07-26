@@ -10,6 +10,9 @@
 // Les options de recherche (aller-retour, passagers, cabine)
 // sont portées par SearchOptions et appliquées au prix de base
 // (par personne, aller simple) via applyOptions().
+// Quand flights-service fournit le bloc `details` (compagnies,
+// segments, horaires, appareil, CO₂ — schéma fast-flights v3),
+// il est normalisé par parseFlightDetails() et joint au quote.
 // ============================================================
 import { distanceKm } from './airports';
 
@@ -35,11 +38,68 @@ export const DEFAULT_SEARCH_OPTIONS: SearchOptions = {
   seat: 'economy',
 };
 
+// ---------- Détails de vol (fast-flights v3, via flights-service) ----------
+export interface FlightLeg {
+  fromCode: string;
+  fromName: string;             // nom complet de l'aéroport
+  toCode: string;
+  toName: string;
+  departure: string | null;     // "YYYY-MM-DDTHH:MM", heure locale aéroport
+  arrival: string | null;
+  durationMin: number;
+  planeType: string | null;     // ex. "Airbus A320"
+}
+
+export interface FlightDetails {
+  airlines: string[];           // ex. ["Air France", "Vueling"]
+  type: string | null;          // libellé Google Flights ("best", "cheap", …)
+  stops: number;                // 0 = direct
+  totalDurationMin: number;     // somme des segments (hors temps d'escale)
+  legs: FlightLeg[];
+  carbon: { emissionG: number | null; typicalG: number | null };
+}
+
+/** Valide et normalise le bloc `details` de flights-service (camelCase). */
+export function parseFlightDetails(raw: unknown): FlightDetails | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, any>;
+  const legs: FlightLeg[] = Array.isArray(r.legs)
+    ? r.legs.map((l: any) => ({
+        fromCode: String(l?.from_code ?? ''),
+        fromName: String(l?.from_name ?? ''),
+        toCode: String(l?.to_code ?? ''),
+        toName: String(l?.to_name ?? ''),
+        departure: typeof l?.departure === 'string' ? l.departure : null,
+        arrival: typeof l?.arrival === 'string' ? l.arrival : null,
+        durationMin: Number(l?.duration_min ?? 0) || 0,
+        planeType: typeof l?.plane_type === 'string' ? l.plane_type : null,
+      }))
+    : [];
+  const airlines: string[] = Array.isArray(r.airlines) ? r.airlines.map(String) : [];
+  if (!legs.length && !airlines.length) return null;
+  const stops = Number.isFinite(Number(r.stops)) ? Number(r.stops) : Math.max(0, legs.length - 1);
+  const total = Number(r.total_duration_min);
+  const emission = Number(r.carbon?.emission_g);
+  const typical = Number(r.carbon?.typical_g);
+  return {
+    airlines,
+    type: typeof r.type === 'string' ? r.type : null,
+    stops,
+    totalDurationMin: Number.isFinite(total) ? total : legs.reduce((s, l) => s + l.durationMin, 0),
+    legs,
+    carbon: {
+      emissionG: Number.isFinite(emission) ? emission : null,
+      typicalG: Number.isFinite(typical) ? typical : null,
+    },
+  };
+}
+
 export interface PriceQuote {
   price: number;        // € TTC total pour tout le groupe / trajet
   currency: 'EUR';
   provider: string;
   options: SearchOptions;
+  details?: FlightDetails; // présent uniquement si le provider le fournit
 }
 
 export interface PriceProvider {
@@ -165,7 +225,8 @@ export class SimulationProvider implements PriceProvider {
 // Contrat : GET {FAST_FLIGHTS_URL}/api/v1/search?from_airport=CDG&to_airport=JFK
 //   &depart_date=2026-09-10&return_date=2026-09-24&trip=round-trip&adults=2
 //   &children=1&infants=0&seat=economy&currency=EUR&language=fr
-// 200 → { "price": 412.5, "currency": "EUR", "provider": "fast-flights", ... }
+// 200 → { "price": 412.5, "currency": "EUR", "provider": "fast-flights",
+//         "flights_count": 12, "details": { airlines, legs, stops, carbon, … } }
 // 404 → aucun vol trouvé · 4xx → paramètres invalides · 502 → échec du scraper.
 // return_date est omis pour un aller simple ; requis pour un aller-retour.
 export class FastFlightsProvider implements PriceProvider {
@@ -211,7 +272,13 @@ export class FastFlightsProvider implements PriceProvider {
     const data = await res.json();
     const price = Number(data?.price);
     if (!Number.isFinite(price) || price <= 0) throw new Error('flights-service: réponse sans offre tarifée');
-    return { price, currency: 'EUR', provider: this.name, options };
+    const quote: PriceQuote = { price, currency: 'EUR', provider: this.name, options };
+    // Détails du vol le moins cher (compagnies, segments, horaires, CO₂) —
+    // absents des anciennes versions du service : la clé n'est ajoutée
+    // que si le bloc est présent et exploitable.
+    const details = parseFlightDetails(data?.details);
+    if (details) quote.details = details;
+    return quote;
   }
 }
 

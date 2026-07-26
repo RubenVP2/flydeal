@@ -2,7 +2,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
-import { SearchOptions, DEFAULT_SEARCH_OPTIONS } from './price-engine';
+import { SearchOptions, DEFAULT_SEARCH_OPTIONS, FlightDetails } from './price-engine';
 
 const DATA_DIR = process.env.DATA_DIR || '/app/data';
 // En dev local hors Docker, fallback sur ./data du projet.
@@ -60,6 +60,15 @@ for (const [col, def] of WATCH_OPTION_COLUMNS) {
   if (!existing.has(col)) db.exec(`ALTER TABLE watches ADD COLUMN ${col} ${def}`);
 }
 
+// Migration idempotente : colonne `details` sur prices — JSON du détail
+// du vol mesuré (compagnies, segments, horaires, appareil, CO₂) fourni
+// par flights-service au moment du relevé. NULL pour les anciens relevés
+// et pour le provider simulation (pas de données vol).
+const priceCols = new Set(
+  (db.prepare('PRAGMA table_info(prices)').all() as { name: string }[]).map(c => c.name)
+);
+if (!priceCols.has('details')) db.exec('ALTER TABLE prices ADD COLUMN details TEXT');
+
 // Migration idempotente : purge les relevés de prix datés AVANT la création
 // de leur surveillance. Ces lignes sont nécessairement fabriquées (ancien
 // seed qui simulait 30 jours d'historique) : un relevé réel est toujours
@@ -95,12 +104,21 @@ export interface PricePoint {
   depart_date: string;
   price: number;
   checked_at: string;
+  details: FlightDetails | null; // détail du vol au moment du relevé, si fourni
 }
 
 interface WatchRow extends Omit<Watch, 'origins' | 'destinations'> { origins: string; destinations: string; }
+interface PriceRow extends Omit<PricePoint, 'details'> { details: string | null; }
 
 function mapWatch(r: WatchRow): Watch {
   return { ...r, origins: JSON.parse(r.origins), destinations: JSON.parse(r.destinations) };
+}
+function mapPrice(r: PriceRow): PricePoint {
+  let details: FlightDetails | null = null;
+  if (r.details) {
+    try { details = JSON.parse(r.details) as FlightDetails; } catch { details = null; }
+  }
+  return { ...r, details };
 }
 
 export function listWatches(): Watch[] {
@@ -144,17 +162,27 @@ export function updateWatch(
 export function deleteWatch(id: number): boolean {
   return db.prepare('DELETE FROM watches WHERE id = ?').run(id).changes > 0;
 }
-export function addPrice(watch_id: number, origin: string, destination: string, depart_date: string, price: number, checked_at?: string): void {
+export function addPrice(
+  watch_id: number,
+  origin: string,
+  destination: string,
+  depart_date: string,
+  price: number,
+  checked_at?: string,
+  details?: FlightDetails | null,
+): void {
+  const detailsJson = details ? JSON.stringify(details) : null;
   if (checked_at) {
-    db.prepare('INSERT INTO prices (watch_id, origin, destination, depart_date, price, checked_at) VALUES (?,?,?,?,?,?)')
-      .run(watch_id, origin, destination, depart_date, price, checked_at);
+    db.prepare('INSERT INTO prices (watch_id, origin, destination, depart_date, price, checked_at, details) VALUES (?,?,?,?,?,?,?)')
+      .run(watch_id, origin, destination, depart_date, price, checked_at, detailsJson);
   } else {
-    db.prepare('INSERT INTO prices (watch_id, origin, destination, depart_date, price) VALUES (?,?,?,?,?)')
-      .run(watch_id, origin, destination, depart_date, price);
+    db.prepare('INSERT INTO prices (watch_id, origin, destination, depart_date, price, details) VALUES (?,?,?,?,?,?)')
+      .run(watch_id, origin, destination, depart_date, price, detailsJson);
   }
 }
 export function getPrices(watchId: number): PricePoint[] {
-  return db.prepare('SELECT * FROM prices WHERE watch_id = ? ORDER BY checked_at ASC').all(watchId) as PricePoint[];
+  const rows = db.prepare('SELECT * FROM prices WHERE watch_id = ? ORDER BY checked_at ASC').all(watchId) as PriceRow[];
+  return rows.map(mapPrice);
 }
 export function touchWatchCheck(id: number, nextCheckAt: string): void {
   db.prepare("UPDATE watches SET last_checked_at = datetime('now'), next_check_at = ? WHERE id = ?").run(nextCheckAt, id);

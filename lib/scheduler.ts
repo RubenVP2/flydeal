@@ -74,7 +74,13 @@ export async function checkWatch(w: Watch): Promise<void> {
         const options = { ...watchOptions(w), returnDate: shiftedReturn };
         jobs.push(
           provider.getPrice(o, d, dateStr, options, now)
-            .then(q => addPrice(w.id, o, d, dateStr, q.price))
+            .then(q => {
+              // Le détail du vol (fast-flights) est stocké avec le relevé
+              // quand le provider le fournit ; sans détails, appel au
+              // contrat historique à 5 arguments.
+              if (q.details) addPrice(w.id, o, d, dateStr, q.price, undefined, q.details);
+              else addPrice(w.id, o, d, dateStr, q.price);
+            })
             .catch(err => console.error(`[flydeal] prix ${o}->${d} ${dateStr}:`, err.message))
         );
       }
