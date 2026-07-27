@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { PlaneTakeoff, PlaneLanding, Trophy } from 'lucide-react';
 import type { FlightDetails } from '@/lib/price-engine';
 import { relativeAge, ageMs } from '@/lib/relative-age';
+import { findBestPriceCell, bestPriceSourceLabel } from '@/lib/best-price';
 import PriceCellModal, { PriceCellSelection } from './PriceCellModal';
 
 // ============================================================
@@ -24,6 +25,10 @@ import PriceCellModal, { PriceCellSelection } from './PriceCellModal';
 //    cellule estompée, source « inconnue » dans le tooltip ;
 //  · relevé de plus de 12 h → cellule estompée (prix possiblement
 //    périmé) ; le tooltip affiche l'âge relatif du relevé.
+// MEILLEUR PRIX : le minimum est calculé sur toutes les cellules,
+// mais le badge porte la mention « (simulé) » ou « (source
+// inconnue) » quand la cellule gagnante n'est pas un relevé réel
+// (voir lib/best-price.ts pour le choix retenu).
 // ============================================================
 
 export interface HeatmapPoint {
@@ -81,13 +86,14 @@ export default function PriceHeatmap({ points }: { points: HeatmapPoint[] }) {
   const max = Math.max(...prices);
   const span = max - min || 1;
 
-  // Meilleure cellule de la fenêtre (prix le plus bas).
-  let best: { rowKey: string; date: string; price: number } | null = null;
-  for (const [k, c] of cells) {
-    if (c.price === min && !best) {
-      const sep = k.lastIndexOf('::');
-      best = { rowKey: k.slice(0, sep), date: k.slice(sep + 2), price: c.price };
-    }
+  // Meilleure cellule de la fenêtre (prix le plus bas), avec sa
+  // source : le badge marque « (simulé) » / « (source inconnue) »
+  // si le minimum ne vient pas d'un relevé réel.
+  const bestCell = findBestPriceCell(cells);
+  let best: { rowKey: string; date: string; price: number; provider: string | null } | null = null;
+  if (bestCell) {
+    const sep = bestCell.key.lastIndexOf('::');
+    best = { rowKey: bestCell.key.slice(0, sep), date: bestCell.key.slice(sep + 2), price: bestCell.price, provider: bestCell.provider };
   }
 
   // Sélection courante → objet complet pour la popup (historique
@@ -118,6 +124,9 @@ export default function PriceHeatmap({ points }: { points: HeatmapPoint[] }) {
           <p className="text-sm flex items-center gap-1.5 flex-wrap">
             <Trophy size={14} className="text-[#30D158] shrink-0" />
             Meilleur prix : <span className="font-bold text-[#30D158]">{best.price.toFixed(0)}&nbsp;€</span>
+            {bestPriceSourceLabel(best.provider) && (
+              <span className="text-xs font-medium opacity-60">{bestPriceSourceLabel(best.provider)}</span>
+            )}
             <span className="opacity-60">
               · {best.rowKey.replace('|', ' → ')} · départ {LONG_FMT.format(new Date(best.date + 'T12:00:00Z'))}
             </span>
