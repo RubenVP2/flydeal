@@ -53,7 +53,12 @@ export default function Dashboard() {
     const primary = getPrimarySeriesPoints(w, prices);
     const currentPrice = primary.length ? primary[primary.length - 1].price
       : simulatePrice(w.origins[0], w.destinations[0], w.depart_date);
-    const score = computeDealScore({ currentPrice, history: primary, distanceKm: distanceKm(w.origins[0], w.destinations[0]), departDate: w.depart_date });
+    const score = computeDealScore({
+      currentPrice, history: primary, distanceKm: distanceKm(w.origins[0], w.destinations[0]), departDate: w.depart_date,
+      // Normalisation €/km : le prix est un total groupe/trajet.
+      travelers: w.adults + w.children + w.infants,
+      roundTrip: w.trip === 'round-trip',
+    });
     return { w, primary, currentPrice, score };
   });
 

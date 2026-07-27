@@ -1,6 +1,7 @@
 import './globals.css';
 import type { Metadata, Viewport } from 'next';
 import Nav from '@/components/Nav';
+import StatusBanner from '@/components/StatusBanner';
 
 export const metadata: Metadata = {
   title: 'FlyDeal — Analyse quotidienne des prix de vols',
@@ -18,6 +19,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           }}
         />
         <Nav />
+        <StatusBanner />
         <main className="max-w-5xl mx-auto px-4 sm:px-6 pb-16 pt-6">{children}</main>
       </body>
     </html>
