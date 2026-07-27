@@ -1,7 +1,8 @@
 'use client';
 import { useEffect } from 'react';
-import { X, ExternalLink, Clock, Leaf, TrendingDown, TrendingUp } from 'lucide-react';
+import { X, ExternalLink, Clock, Leaf, TrendingDown, TrendingUp, AlertTriangle } from 'lucide-react';
 import type { FlightDetails } from '@/lib/price-engine';
+import { relativeAge } from '@/lib/relative-age';
 
 // ============================================================
 // POPUP CELLULE HEATMAP — fiche complète d'un couple
@@ -13,6 +14,9 @@ import type { FlightDetails } from '@/lib/price-engine';
 //    d'aéroports, durées, appareil, escales, CO₂,
 //  · historique 30 jours de la cellule (stats + sparkline + relevés),
 //  · lien de vérification vers Google Flights.
+// FIABILITÉ : un relevé de provider 'simulation' affiche un encart
+// explicite « Prix simulé » ; un relevé réel rappelle en bas la
+// méthode de mesure et l'âge du relevé.
 // Style : carte iOS centrée — coins très arrondis, fond flouté,
 // typographie SF, animations discrètes (fade + zoom).
 // ============================================================
@@ -21,6 +25,7 @@ export interface CellPoint {
   price: number;
   checkedAt: string;               // relevé UTC
   details?: FlightDetails | null;  // détail backend capturé à ce relevé
+  provider?: string | null;        // 'fast-flights' = réel · 'simulation' = fictif · null = source inconnue
 }
 
 export interface PriceCellSelection {
@@ -150,7 +155,7 @@ export default function PriceCellModal({ cell, onClose }: { cell: PriceCellSelec
             )}
           </div>
           <p className="text-xs opacity-50 mt-1.5">
-            Relevé le {fmtChecked(latest.checkedAt)} · {cell.points.length} relevé{cell.points.length > 1 ? 's' : ''} sur 30 jours
+            Relevé {relativeAge(latest.checkedAt)} (le {fmtChecked(latest.checkedAt)}) · {cell.points.length} relevé{cell.points.length > 1 ? 's' : ''} sur 30 jours
           </p>
 
           {/* Détail du vol — données backend (Google Flights via fast-flights). */}
@@ -217,10 +222,17 @@ export default function PriceCellModal({ cell, onClose }: { cell: PriceCellSelec
                 )}
               </div>
             </div>
+          ) : latest.provider === 'simulation' ? (
+            // Prix fictif de démonstration : encart explicite, jamais
+            // présenté comme un prix réellement constaté.
+            <p className="mt-5 flex items-start gap-2 rounded-2xl bg-[#FF9F0A]/15 text-[#8a5a00] dark:text-[#FF9F0A] text-[13px] font-medium p-3.5">
+              <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+              Prix simulé — ne correspond pas au marché réel. Configurez FAST_FLIGHTS_URL pour obtenir des prix réels.
+            </p>
           ) : (
             <p className="text-[11px] opacity-40 italic mt-5">
-              Détail du vol indisponible pour ce relevé — enregistré avant l'activation des détails,
-              ou provider sans données Google Flights (mode simulation).
+              Détail du vol indisponible pour ce relevé — enregistré avant l'activation des détails
+              {latest.provider == null ? ' (source inconnue : relevé antérieur au suivi de source)' : ''}.
             </p>
           )}
 
@@ -257,6 +269,15 @@ export default function PriceCellModal({ cell, onClose }: { cell: PriceCellSelec
           <p className="text-[10px] opacity-40 text-center mt-2">
             Le prix en direct peut différer du dernier relevé — il évolue entre deux vérifications.
           </p>
+          {/* Prix réel : rappel de la méthode de mesure (scraping du tarif
+              le plus bas, toutes options confondues) pour éviter toute
+              confusion avec une recherche Google Flights classique. */}
+          {latest.provider != null && latest.provider !== 'simulation' && (
+            <p className="text-[10px] opacity-40 text-center mt-1.5">
+              Tarif le plus bas constaté toutes options confondues (escales et bagage non inclus possibles) :
+              un écart avec une recherche Google Flights classique est normal. Relevé {relativeAge(latest.checkedAt)}.
+            </p>
+          )}
         </div>
       </div>
     </div>
