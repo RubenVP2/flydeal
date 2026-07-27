@@ -3,8 +3,9 @@
 // Chaque test charge le module avec un DATA_DIR temporaire neuf
 // (vi.resetModules + import dynamique) pour isoler la base.
 // Couvre : CRUD des surveillances, options de recherche (défauts
-// et valeurs complètes), relevés de prix, planification, et la
-// migration des colonnes d'options sur une base à l'ancien schéma.
+// et valeurs complètes), relevés de prix (dont provider),
+// planification, et les migrations du schéma (options + provider)
+// sur une base à l'ancien schéma.
 // Lancer : npm test
 // ============================================================
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -111,6 +112,19 @@ describe('db — prix et planification', () => {
     expect(prices[1].checked_at).toBeTruthy();
   });
 
+  it('addPrice stocke le provider ; absent → NULL (source inconnue)', async () => {
+    const db = await loadDb();
+    const w = db.createWatch(['CDG'], ['JFK'], '2026-09-10', 3);
+    db.addPrice(w.id, 'CDG', 'JFK', '2026-09-10', 350.5, undefined, null, 'fast-flights');
+    db.addPrice(w.id, 'CDG', 'JFK', '2026-09-10', 342.1, undefined, null, 'simulation');
+    db.addPrice(w.id, 'CDG', 'JFK', '2026-09-10', 340); // appel historique, sans provider
+    const prices = db.getPrices(w.id);
+    expect(prices).toHaveLength(3);
+    expect(prices[0].provider).toBe('fast-flights');
+    expect(prices[1].provider).toBe('simulation');
+    expect(prices[2].provider).toBeNull();
+  });
+
   it('touchWatchCheck / setNextCheck mettent à jour les échéances', async () => {
     const db = await loadDb();
     const w = db.createWatch(['CDG'], ['JFK'], '2026-09-10', 3);
@@ -200,5 +214,46 @@ describe('db — migration du schéma', () => {
     const prices = db.getPrices(1);
     expect(prices).toHaveLength(1);
     expect(prices[0].price).toBe(342.1);
+  });
+
+  it('ajoute la colonne provider aux prices d\'une base à l\'ancien schéma', async () => {
+    // Base "ancienne version" : prices sans colonnes details/provider.
+    const dir = freshDir();
+    fs.mkdirSync(dir, { recursive: true });
+    const old = new Database(path.join(dir, 'flydeal.db'));
+    old.exec(`
+      CREATE TABLE watches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        origins TEXT NOT NULL,
+        destinations TEXT NOT NULL,
+        depart_date TEXT NOT NULL,
+        flex_days INTEGER NOT NULL DEFAULT 3,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_checked_at TEXT,
+        next_check_at TEXT
+      );
+      CREATE TABLE prices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        watch_id INTEGER NOT NULL REFERENCES watches(id) ON DELETE CASCADE,
+        origin TEXT NOT NULL,
+        destination TEXT NOT NULL,
+        depart_date TEXT NOT NULL,
+        price REAL NOT NULL,
+        checked_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO watches (origins, destinations, depart_date, flex_days, created_at)
+        VALUES ('["CDG"]', '["JFK"]', '2026-09-10', 3, '2026-07-20 00:00:00');
+      INSERT INTO prices (watch_id, origin, destination, depart_date, price, checked_at)
+        VALUES (1, 'CDG', 'JFK', '2026-09-10', 342.1, '2026-07-21 03:00:00');
+    `);
+    old.close();
+
+    const db = await loadDb(dir);
+    const cols = (db.db.prepare('PRAGMA table_info(prices)').all() as { name: string }[]).map(c => c.name);
+    expect(cols).toContain('provider');
+    // Le relevé existant reste lisible, avec une source inconnue (NULL).
+    const prices = db.getPrices(1);
+    expect(prices).toHaveLength(1);
+    expect(prices[0].provider).toBeNull();
   });
 });
