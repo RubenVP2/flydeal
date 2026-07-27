@@ -41,7 +41,9 @@ function latestPricePerDate(w: Watch, prices: PricePoint[]): Map<string, PricePo
   return map;
 }
 
-export function computeTactics(w: Watch, prices: PricePoint[], currentPrice: number): Tactic[] {
+// currentPrice : dernier prix réellement relevé, null si aucun relevé
+// (jamais de prix simulé) — les économies chiffrées restent alors null.
+export function computeTactics(w: Watch, prices: PricePoint[], currentPrice: number | null): Tactic[] {
   const tactics: Tactic[] = [];
   const origin = w.origins[0];
   const dest = w.destinations[0];
@@ -60,7 +62,7 @@ export function computeTactics(w: Watch, prices: PricePoint[], currentPrice: num
     .sort((a, b) => a.price - b.price);
   const otherDates = rows.filter(r => r.date !== baseDate);
   const cheapestOther = otherDates.length ? otherDates[0] : null;
-  const flexSavings = cheapestOther ? Math.max(0, Math.round(currentPrice - cheapestOther.price)) : null;
+  const flexSavings = cheapestOther && currentPrice != null ? Math.max(0, Math.round(currentPrice - cheapestOther.price)) : null;
   tactics.push({
     id: 'flex-dates',
     title: 'Dates flexibles : comparer les jours voisins',
@@ -68,7 +70,7 @@ export function computeTactics(w: Watch, prices: PricePoint[], currentPrice: num
       ? `Les compagnies remplissent leurs avions par "classes de réservation" : un même siège peut changer de prix d'un jour à l'autre selon le taux de remplissage prévu. Voici les prix réellement relevés par FlyDeal pour votre route, sur les dates proches de votre départ (± ${w.flex_days} j).`
       : `Les compagnies remplissent leurs avions par "classes de réservation" : un même siège peut changer de prix d'un jour à l'autre. FlyDeal relève les dates proches de votre départ (± ${w.flex_days} j) à chaque vérification — la comparaison chiffrée apparaîtra ici dès les prochains relevés.`,
     estimatedSavings: flexSavings && flexSavings > 0 ? flexSavings : null,
-    savingsPct: flexSavings && flexSavings > 0 ? Math.round((flexSavings / currentPrice) * 100) : null,
+    savingsPct: flexSavings && flexSavings > 0 && currentPrice ? Math.round((flexSavings / currentPrice) * 100) : null,
     warning: null,
     source: otherDates.length ? 'observed' : 'method',
     detail: rows.length ? rows.map(({ label, price }) => ({ label, price })) : undefined,
@@ -194,7 +196,7 @@ export function computeTactics(w: Watch, prices: PricePoint[], currentPrice: num
     const min = Math.min(...series.map(p => p.price));
     const sorted = [...series].sort((a, b) => a.price - b.price);
     const median = sorted[Math.floor(sorted.length / 2)].price;
-    if (min < median * 0.6) {
+    if (min < median * 0.6 && currentPrice != null) {
       tactics.push({
         id: 'error-fare',
         title: '🚨 Error fare détectée dans vos relevés',
