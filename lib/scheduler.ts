@@ -10,6 +10,7 @@
 import cron from 'node-cron';
 import { listWatches, addPrice, touchWatchCheck, watchOptions, Watch } from './db';
 import { getProvider } from './price-engine';
+import { recordScraperSuccess, recordScraperFailure } from './scraper-status';
 
 export function daysToDeparture(w: Watch, from: Date = new Date()): number {
   return Math.round((new Date(w.depart_date + 'T12:00:00Z').getTime() - from.getTime()) / 86400000);
@@ -63,6 +64,12 @@ export async function checkWatch(w: Watch): Promise<void> {
   const provider = getProvider();
   const now = new Date();
   const jobs: Promise<void>[] = [];
+  // Suivi de santé du scraper sur CETTE vérification : une erreur autre
+  // que « aucune offre » (404 — scraper fonctionnel, pas de vol dispo)
+  // compte comme un échec du scraper. Détection par code d'erreur
+  // (duck typing) pour rester robuste aux mocks/tests.
+  let scraperFailures = 0;
+  let lastScraperError: string | null = null;
   const shiftDate = (iso: string, delta: number) =>
     new Date(new Date(iso + 'T12:00:00Z').getTime() + delta * 86400000).toISOString().slice(0, 10);
   for (const o of w.origins) {
@@ -75,18 +82,29 @@ export async function checkWatch(w: Watch): Promise<void> {
         jobs.push(
           provider.getPrice(o, d, dateStr, options, now)
             .then(q => {
-              // Le détail du vol (fast-flights) est stocké avec le relevé
-              // quand le provider le fournit ; sans détails, appel au
-              // contrat historique à 5 arguments.
-              if (q.details) addPrice(w.id, o, d, dateStr, q.price, undefined, q.details);
-              else addPrice(w.id, o, d, dateStr, q.price);
+              // Le relevé emporte le nom du provider qui l'a produit
+              // ('fast-flights' = réel, 'simulation' = fictif) et le
+              // détail du vol quand le backend le fournit.
+              addPrice(w.id, o, d, dateStr, q.price, undefined, q.details ?? null, q.provider);
             })
-            .catch(err => console.error(`[flydeal] prix ${o}->${d} ${dateStr}:`, err.message))
+            .catch(err => {
+              if (err?.code !== 'NO_OFFER') {
+                scraperFailures += 1;
+                lastScraperError = err?.message ?? String(err);
+              }
+              console.error(`[flydeal] prix ${o}->${d} ${dateStr}:`, err.message);
+            })
         );
       }
     }
   }
   await Promise.all(jobs);
+  // Enregistre la santé du scraper réel (en mode simulation, /api/status
+  // signale déjà que les prix sont fictifs : rien à suivre).
+  if (provider.name !== 'simulation') {
+    if (scraperFailures > 0) recordScraperFailure(lastScraperError ?? 'erreur inconnue');
+    else recordScraperSuccess(now);
+  }
   touchWatchCheck(w.id, nextCheckTime(w).toISOString());
 }
 

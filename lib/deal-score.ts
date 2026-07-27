@@ -11,10 +11,12 @@
 // ============================================================
 
 export interface DealScoreInput {
-  currentPrice: number;        // prix actuel (€)
+  currentPrice: number;        // prix actuel (€) — total groupe/trajet
   history: { price: number; checked_at: string }[]; // historique complet (ordre chrono)
-  distanceKm: number;          // distance de la route
+  distanceKm: number;          // distance de la route (aller simple)
   departDate: string;          // YYYY-MM-DD
+  travelers?: number;          // nb total de voyageurs (défaut 1) — pour normaliser le €/km
+  roundTrip?: boolean;         // aller-retour (défaut false) — idem
   now?: Date;
 }
 
@@ -76,12 +78,22 @@ export function computeDealScore(input: DealScoreInput): DealScoreResult {
   });
 
   // --- 3. Prix normalisé €/km (poids 15 %) ---
-  const eurPerKm = input.currentPrice / Math.max(1, input.distanceKm);
+  // currentPrice est le TOTAL du groupe et du trajet alors que
+  // MEDIAN_EUR_PER_KM est calibrée par personne et par trajet simple :
+  // on normalise donc par le nombre de voyageurs et par 2 pour un
+  // aller-retour. Choix conservateur : on compte chaque voyageur
+  // (enfant/bébé inclus) pour 1, sans appliquer les rabais jeunes —
+  // approximation simple, documentée ; le €/km résultant est légèrement
+  // optimiste pour les groupes avec enfants.
+  const travelers = Math.max(1, Math.round(input.travelers ?? 1));
+  const legs = input.roundTrip ? 2 : 1;
+  const perPersonPerLeg = input.currentPrice / travelers / legs;
+  const eurPerKm = perPersonPerLeg / Math.max(1, input.distanceKm);
   const ratio = eurPerKm / MEDIAN_EUR_PER_KM; // 1 = médiane
   const kmScore = Math.max(0, Math.min(100, 100 - (ratio - 0.5) * 100));
   components.push({
     key: 'perkm', label: 'Prix par km', weight: 0.15, value: kmScore,
-    detail: `${(eurPerKm * 100).toFixed(1)} c€/km vs médiane ${(MEDIAN_EUR_PER_KM * 100).toFixed(0)} c€/km`,
+    detail: `${(eurPerKm * 100).toFixed(1)} c€/km (par personne et par trajet) vs médiane ${(MEDIAN_EUR_PER_KM * 100).toFixed(0)} c€/km`,
   });
 
   // --- 4. Tendance 7 jours, régression linéaire (poids 20 %) ---
