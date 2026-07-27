@@ -2,20 +2,28 @@
 import { useState } from 'react';
 import { PlaneTakeoff, PlaneLanding, Trophy } from 'lucide-react';
 import type { FlightDetails } from '@/lib/price-engine';
+import { relativeAge, ageMs } from '@/lib/relative-age';
 import PriceCellModal, { PriceCellSelection } from './PriceCellModal';
 
 // ============================================================
 // HEATMAP PRIX — routes × dates de départ (type « dates
 // flexibles » des comparateurs de vols). Lignes = routes
 // (aéroport départ → arrivée), colonnes = dates de départ,
-// cellule = dernier prix RÉELLEMENT mesuré sur les 30 derniers
-// jours pour ce couple route × date. Échelle de couleur :
+// cellule = dernier prix enregistré sur les 30 derniers jours
+// pour ce couple route × date. Échelle de couleur :
 // vert = bon plan (min de la fenêtre), rouge = cher (max).
 // La grille défile horizontalement, la colonne des routes reste
 // collée à gauche. CLIC sur une cellule → popup détaillée :
 // vol mesuré (compagnies, horaires, escales, appareil, CO₂),
 // historique de la cellule et lien Google Flights. Aucune
 // donnée fabriquée : les cellules sans relevé restent vides.
+// FIABILITÉ : la source de chaque relevé est visible —
+//  · provider 'simulation' → contour pointillé + « Simulé » dans
+//    le tooltip (prix fictif, jamais présenté comme réel) ;
+//  · provider null (relevé antérieur au suivi de source) →
+//    cellule estompée, source « inconnue » dans le tooltip ;
+//  · relevé de plus de 12 h → cellule estompée (prix possiblement
+//    périmé) ; le tooltip affiche l'âge relatif du relevé.
 // ============================================================
 
 export interface HeatmapPoint {
@@ -25,18 +33,17 @@ export interface HeatmapPoint {
   price: number;
   checkedAt: string;  // relevé UTC ("YYYY-MM-DD HH:MM:SS" ou ISO)
   details?: FlightDetails | null; // détail backend du vol mesuré
+  provider: string | null;        // 'fast-flights' = réel · 'simulation' = fictif · null = source inconnue
 }
 
-interface Cell { price: number; checkedAt: string }
+interface Cell { price: number; checkedAt: string; provider: string | null }
+
+// Au-delà de 12 h, un relevé est considéré comme possiblement périmé.
+const STALE_MS = 12 * 3600000;
 
 const WEEKDAY_FMT = new Intl.DateTimeFormat('fr-FR', { weekday: 'short', timeZone: 'UTC' });
 const DAY_FMT = new Intl.DateTimeFormat('fr-FR', { day: '2-digit', month: '2-digit', timeZone: 'UTC' });
 const LONG_FMT = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'long', timeZone: 'UTC' });
-
-function fmtChecked(iso: string): string {
-  const d = new Date(iso.includes('T') ? iso : iso.replace(' ', 'T') + 'Z');
-  return d.toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-}
 
 // t = 0 → vert (bon plan), t = 1 → rouge (cher). Même échelle
 // visuelle que les comparateurs : vert → jaune → orange → rouge.
@@ -64,7 +71,7 @@ export default function PriceHeatmap({ points }: { points: HeatmapPoint[] }) {
       rows.push({ key: rowKey, origin: p.origin, destination: p.destination });
     }
     dates.add(p.departDate);
-    cells.set(`${rowKey}::${p.departDate}`, { price: p.price, checkedAt: p.checkedAt });
+    cells.set(`${rowKey}::${p.departDate}`, { price: p.price, checkedAt: p.checkedAt, provider: p.provider });
   }
   const cols = [...dates].sort();
   if (!rows.length || !cols.length) return null;
@@ -91,7 +98,7 @@ export default function PriceHeatmap({ points }: { points: HeatmapPoint[] }) {
     if (row) {
       const cellPoints = points
         .filter(p => `${p.origin}|${p.destination}` === selected.rowKey && p.departDate === selected.date)
-        .map(p => ({ price: p.price, checkedAt: p.checkedAt, details: p.details ?? null }));
+        .map(p => ({ price: p.price, checkedAt: p.checkedAt, details: p.details ?? null, provider: p.provider }));
       if (cellPoints.length) {
         selection = {
           origin: row.origin,
@@ -165,16 +172,34 @@ export default function PriceHeatmap({ points }: { points: HeatmapPoint[] }) {
                   }
                   const t = (c.price - min) / span;
                   const isBest = best !== null && r.key === best.rowKey && d === best.date;
+                  // Fiabilité du relevé : prix simulé (fictif), source
+                  // inconnue (avant le suivi de provider) ou relevé de
+                  // plus de 12 h → la cellule ne doit pas paraître aussi
+                  // fiable qu'un prix réel et frais.
+                  const simulated = c.provider === 'simulation';
+                  const unknownSource = c.provider == null;
+                  const stale = ageMs(c.checkedAt) > STALE_MS;
+                  const faded = simulated || unknownSource || stale;
+                  const sourceLabel = simulated
+                    ? ' · prix SIMULÉ (démonstration, ne correspond pas au marché réel)'
+                    : unknownSource ? ' · source inconnue' : '';
                   return (
                     <button
                       key={d}
                       type="button"
                       onClick={() => setSelected({ rowKey: r.key, date: d })}
-                      title={`${r.origin} → ${r.destination} · départ ${LONG_FMT.format(new Date(d + 'T12:00:00Z'))} : ${c.price.toFixed(0)} € (relevé le ${fmtChecked(c.checkedAt)}) — cliquer pour le détail`}
+                      title={`${r.origin} → ${r.destination} · départ ${LONG_FMT.format(new Date(d + 'T12:00:00Z'))} : ${c.price.toFixed(0)} € (relevé ${relativeAge(c.checkedAt)})${sourceLabel} — cliquer pour le détail`}
                       className={`w-[76px] h-12 shrink-0 flex items-center justify-center text-[13px] font-semibold text-white cursor-pointer transition-transform duration-100 hover:scale-[1.08] hover:rounded-md hover:shadow-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${
                         isBest ? 'ring-2 ring-inset ring-white/90' : ''
                       }`}
-                      style={{ background: heatColor(t), textShadow: '0 1px 2px rgba(0,0,0,.35)' }}
+                      style={{
+                        background: heatColor(t),
+                        textShadow: '0 1px 2px rgba(0,0,0,.35)',
+                        opacity: faded ? 0.45 : 1,
+                        ...(simulated
+                          ? { outline: '2px dashed rgba(255,255,255,.9)', outlineOffset: '-3px' }
+                          : {}),
+                      }}
                     >
                       {c.price.toFixed(0)}&nbsp;€
                     </button>
@@ -189,9 +214,10 @@ export default function PriceHeatmap({ points }: { points: HeatmapPoint[] }) {
       </div>
 
       <p className="text-[11px] opacity-40 mt-2">
-        {points.length} relevé{points.length > 1 ? 's' : ''} mesuré{points.length > 1 ? 's' : ''} sur les 30 derniers jours
-        — chaque cellule affiche le dernier prix mesuré pour un couple route × date de départ.
+        {points.length} relevé{points.length > 1 ? 's' : ''} sur les 30 derniers jours
+        — chaque cellule affiche le dernier prix enregistré pour un couple route × date de départ.
         Touchez une cellule pour le détail du vol. Les cellules « – » n'ont pas encore de relevé.
+        Cellules en pointillé = prix simulés (démonstration) ; cellules estompées = relevé de plus de 12 h ou source inconnue.
       </p>
 
       {/* Popup détaillée de la cellule sélectionnée. */}

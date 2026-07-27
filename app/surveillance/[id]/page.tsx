@@ -46,7 +46,12 @@ export default function WatchDetail({ params }: { params: { id: string } }) {
   const currentPrice = primary.length
     ? primary[primary.length - 1].price
     : simulatePrice(w.origins[0], w.destinations[0], w.depart_date);
-  const score = computeDealScore({ currentPrice, history: primary, distanceKm: km, departDate: w.depart_date });
+  const score = computeDealScore({
+    currentPrice, history: primary, distanceKm: km, departDate: w.depart_date,
+    // Normalisation €/km : le prix est un total groupe/trajet.
+    travelers: w.adults + w.children + w.infants,
+    roundTrip: w.trip === 'round-trip',
+  });
   const tactics = computeTactics(w, prices, currentPrice);
 
   // Points pour la heatmap : fenêtre des 30 derniers jours de relevés,
@@ -66,6 +71,7 @@ export default function WatchDetail({ params }: { params: { id: string } }) {
       price: p.price,
       checkedAt: p.checked_at,
       details: p.details,
+      provider: p.provider, // 'fast-flights' = réel · 'simulation' = fictif · null = source inconnue
     }));
 
   return (
