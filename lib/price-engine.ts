@@ -229,6 +229,15 @@ export class SimulationProvider implements PriceProvider {
 //         "flights_count": 12, "details": { airlines, legs, stops, carbon, … } }
 // 404 → aucun vol trouvé · 4xx → paramètres invalides · 502 → échec du scraper.
 // return_date est omis pour un aller simple ; requis pour un aller-retour.
+/**
+ * Erreur « aucune offre » (HTTP 404 du service) : le scraper a RÉPONDU,
+ * il n'y a simplement pas de vol pour cette route/date. À distinguer
+ * d'une panne (timeout, 5xx) qui, elle, doit dégrader le statut scraper.
+ */
+export class NoOfferError extends Error {
+  readonly code = 'NO_OFFER';
+}
+
 export class FastFlightsProvider implements PriceProvider {
   name = 'fast-flights';
   private baseUrl: string | undefined;
@@ -266,7 +275,7 @@ export class FastFlightsProvider implements PriceProvider {
     const res = await fetch(this.buildUrl(origin, destination, departDate, options), {
       signal: AbortSignal.timeout(30000),
     });
-    if (res.status === 404) throw new Error(`flights-service: aucune offre pour ${origin}-${destination} le ${departDate}`);
+    if (res.status === 404) throw new NoOfferError(`flights-service: aucune offre pour ${origin}-${destination} le ${departDate}`);
     if (!res.ok) throw new Error(`flights-service: recherche échouée (${res.status})`);
 
     const data = await res.json();
