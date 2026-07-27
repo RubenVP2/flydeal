@@ -7,7 +7,8 @@
 //     de vérification après le départ.
 //  3. checkWatch() : passage des options de recherche au provider,
 //     décalage conjoint de l'aller ET du retour sur les dates flex,
-//     résilience aux erreurs du provider.
+//     résilience aux erreurs du provider, propagation du provider
+//     au relevé et suivi de santé du scraper (compteur d'échecs).
 //  4. runDueChecks() / startScheduler() avec db et cron mockés.
 // Lancer : npm test
 // ============================================================
@@ -35,6 +36,7 @@ vi.mock('./price-engine', () => ({
 }));
 
 import { daysToDeparture, nextCheckTime, checkWatch, runDueChecks, startScheduler } from './scheduler';
+import { getStatus } from './scraper-status';
 
 const ROUND_TRIP_WATCH: Watch = {
   id: 1,
@@ -125,9 +127,9 @@ describe('checkWatch', () => {
     // Options de la surveillance propagées.
     expect(calls[0][3]).toMatchObject({ trip: 'round-trip', adults: 2, children: 1, seat: 'business' });
     expect(calls[0][4]).toBeInstanceOf(Date);
-    // Prix enregistrés pour chaque date.
+    // Prix enregistrés pour chaque date, avec le nom du provider.
     expect(addPrice).toHaveBeenCalledTimes(3);
-    expect(addPrice).toHaveBeenCalledWith(1, 'CDG', 'JFK', '2026-09-10', 100);
+    expect(addPrice).toHaveBeenCalledWith(1, 'CDG', 'JFK', '2026-09-10', 100, undefined, null, 'test');
     expect(touchWatchCheck).toHaveBeenCalledTimes(1);
   });
 
@@ -144,6 +146,36 @@ describe('checkWatch', () => {
     await expect(checkWatch(ROUND_TRIP_WATCH)).resolves.toBeUndefined();
     expect(addPrice).not.toHaveBeenCalled();
     expect(touchWatchCheck).toHaveBeenCalledTimes(1);
+    errorSpy.mockRestore();
+  });
+
+  it('une panne du provider incrémente le compteur d\'échecs consécutifs du scraper', async () => {
+    const before = getStatus().scraper.consecutiveFailures;
+    getPrice.mockRejectedValue(new Error('timeout réseau'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await checkWatch(ROUND_TRIP_WATCH);
+    expect(getStatus().scraper.consecutiveFailures).toBe(before + 1);
+    expect(getStatus().scraper.lastError).toBe('timeout réseau');
+    errorSpy.mockRestore();
+  });
+
+  it('un relevé réussi réinitialise le compteur d\'échecs et date le dernier succès', async () => {
+    await checkWatch(ROUND_TRIP_WATCH);
+    const s = getStatus().scraper;
+    expect(s.consecutiveFailures).toBe(0);
+    expect(s.lastSuccessAt).toBeTruthy();
+    expect(s.lastError).toBeNull();
+  });
+
+  it('« aucune offre » (NO_OFFER) ne dégrade pas le statut du scraper', async () => {
+    // Remet le compteur à zéro via un succès, puis simule des 404.
+    await checkWatch(ROUND_TRIP_WATCH);
+    const noOffer = Object.assign(new Error('aucune offre'), { code: 'NO_OFFER' });
+    getPrice.mockRejectedValue(noOffer);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await checkWatch(ROUND_TRIP_WATCH);
+    expect(getStatus().scraper.consecutiveFailures).toBe(0);
+    expect(getStatus().scraper.lastSuccessAt).toBeTruthy();
     errorSpy.mockRestore();
   });
 });
