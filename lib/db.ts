@@ -69,6 +69,13 @@ const priceCols = new Set(
 );
 if (!priceCols.has('details')) db.exec('ALTER TABLE prices ADD COLUMN details TEXT');
 
+// Migration idempotente : colonne `provider` sur prices — nom du moteur
+// de prix ayant produit le relevé ('fast-flights' = prix réel scrapé,
+// 'simulation' = prix fictif de démonstration). Nullable pour
+// rétrocompatibilité : les relevés antérieurs à cette colonne ont une
+// SOURCE INCONNUE et sont traités comme suspects côté UI (estompés).
+if (!priceCols.has('provider')) db.exec('ALTER TABLE prices ADD COLUMN provider TEXT');
+
 // Migration idempotente : purge les relevés de prix datés AVANT la création
 // de leur surveillance. Ces lignes sont nécessairement fabriquées (ancien
 // seed qui simulait 30 jours d'historique) : un relevé réel est toujours
@@ -105,6 +112,7 @@ export interface PricePoint {
   price: number;
   checked_at: string;
   details: FlightDetails | null; // détail du vol au moment du relevé, si fourni
+  provider: string | null;       // moteur de prix du relevé ('fast-flights'/'simulation'), NULL = source inconnue (avant migration)
 }
 
 interface WatchRow extends Omit<Watch, 'origins' | 'destinations'> { origins: string; destinations: string; }
@@ -170,14 +178,15 @@ export function addPrice(
   price: number,
   checked_at?: string,
   details?: FlightDetails | null,
+  provider?: string | null,
 ): void {
   const detailsJson = details ? JSON.stringify(details) : null;
   if (checked_at) {
-    db.prepare('INSERT INTO prices (watch_id, origin, destination, depart_date, price, checked_at, details) VALUES (?,?,?,?,?,?,?)')
-      .run(watch_id, origin, destination, depart_date, price, checked_at, detailsJson);
+    db.prepare('INSERT INTO prices (watch_id, origin, destination, depart_date, price, checked_at, details, provider) VALUES (?,?,?,?,?,?,?,?)')
+      .run(watch_id, origin, destination, depart_date, price, checked_at, detailsJson, provider ?? null);
   } else {
-    db.prepare('INSERT INTO prices (watch_id, origin, destination, depart_date, price, details) VALUES (?,?,?,?,?,?)')
-      .run(watch_id, origin, destination, depart_date, price, detailsJson);
+    db.prepare('INSERT INTO prices (watch_id, origin, destination, depart_date, price, details, provider) VALUES (?,?,?,?,?,?,?)')
+      .run(watch_id, origin, destination, depart_date, price, detailsJson, provider ?? null);
   }
 }
 export function getPrices(watchId: number): PricePoint[] {
