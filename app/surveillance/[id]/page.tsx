@@ -6,7 +6,7 @@ import { ensureInitialized } from '@/lib/init';
 import { computeDealScore } from '@/lib/deal-score';
 import { computeTactics } from '@/lib/tactics';
 import { distanceKm } from '@/lib/airports';
-import { simulatePrice } from '@/lib/price-engine';
+import { latestMeasuredPrice } from '@/lib/current-price';
 import { groupPricesBySeries, getPrimarySeriesPoints, primarySeriesKey } from '@/lib/series';
 import PriceHeatmap from '@/components/PriceHeatmap';
 import VerdictPanel from '@/components/VerdictPanel';
@@ -43,15 +43,17 @@ export default function WatchDetail({ params }: { params: { id: string } }) {
   // (1er aéroport de départ → 1er d'arrivée, date cible). Mélanger les
   // relevés des routes/dates flexibles fausserait moyenne et percentile.
   const primary = getPrimarySeriesPoints(w, prices);
-  const currentPrice = primary.length
-    ? primary[primary.length - 1].price
-    : simulatePrice(w.origins[0], w.destinations[0], w.depart_date);
-  const score = computeDealScore({
-    currentPrice, history: primary, distanceKm: km, departDate: w.depart_date,
-    // Normalisation €/km : le prix est un total groupe/trajet.
-    travelers: w.adults + w.children + w.infants,
-    roundTrip: w.trip === 'round-trip',
-  });
+  // Jamais de prix simulé en secours : sans relevé, currentPrice et
+  // score restent null et l'UI affiche un état neutre explicite.
+  const currentPrice = latestMeasuredPrice(primary);
+  const score = currentPrice != null
+    ? computeDealScore({
+        currentPrice, history: primary, distanceKm: km, departDate: w.depart_date,
+        // Normalisation €/km : le prix est un total groupe/trajet.
+        travelers: w.adults + w.children + w.infants,
+        roundTrip: w.trip === 'round-trip',
+      })
+    : null;
   const tactics = computeTactics(w, prices, currentPrice);
 
   // Points pour la heatmap : fenêtre des 30 derniers jours de relevés,
@@ -87,7 +89,19 @@ export default function WatchDetail({ params }: { params: { id: string } }) {
         <CheckNowButton id={w.id} />
       </div>
 
-      <VerdictPanel score={score} />
+      {score ? (
+        <VerdictPanel score={score} />
+      ) : (
+        // Aucun relevé réel : pas de prix fictif ni de verdict —
+        // état neutre en attendant la première vérification.
+        <div className="card text-center py-10">
+          <p className="font-medium">Aucun relevé pour le moment</p>
+          <p className="text-sm opacity-60 mt-1">
+            La première vérification interviendra sous peu — le prix, le verdict et le deal-score apparaîtront ici.
+            Vous pouvez aussi forcer un premier relevé avec « Vérifier maintenant ».
+          </p>
+        </div>
+      )}
 
       <div className="card">
         <h2 className="font-semibold mb-4">Prix par route et date <span className="text-xs font-normal opacity-50">(dates flexibles · 30 derniers jours · touchez une cellule pour le détail)</span></h2>

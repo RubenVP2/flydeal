@@ -3,7 +3,7 @@ import { Compass } from 'lucide-react';
 import { listWatches, getPrices } from '@/lib/db';
 import { ensureInitialized } from '@/lib/init';
 import { computeTactics } from '@/lib/tactics';
-import { simulatePrice } from '@/lib/price-engine';
+import { latestMeasuredPrice } from '@/lib/current-price';
 import { getPrimarySeriesPoints } from '@/lib/series';
 import TacticsPanel from '@/components/TacticsPanel';
 
@@ -32,7 +32,9 @@ export default function ContournementsPage() {
       {watches.map(w => {
         const prices = getPrices(w.id);
         const primary = getPrimarySeriesPoints(w, prices);
-        const current = primary.length ? primary[primary.length - 1].price : simulatePrice(w.origins[0], w.destinations[0], w.depart_date);
+        // Jamais de prix simulé en secours : sans relevé, aucun
+        // montant n'est affiché et les tactiques restent non chiffrées.
+        const current = latestMeasuredPrice(primary);
         const tactics = computeTactics(w, prices, current);
         return (
           <section key={w.id}>
@@ -40,7 +42,9 @@ export default function ContournementsPage() {
               <Link href={`/surveillance/${w.id}`} className="hover:text-accent transition-colors">
                 {w.origins.join(' / ')} → {w.destinations.join(' / ')} · {w.depart_date}
               </Link>
-              <span className="text-sm font-normal opacity-50 ml-2">prix actuel {current.toFixed(0)} €</span>
+              {current != null
+                ? <span className="text-sm font-normal opacity-50 ml-2">prix actuel {current.toFixed(0)} €</span>
+                : <span className="text-sm font-normal opacity-50 ml-2">aucun relevé pour le moment</span>}
             </h2>
             <TacticsPanel tactics={tactics} />
           </section>

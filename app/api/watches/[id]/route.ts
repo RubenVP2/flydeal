@@ -4,7 +4,7 @@ import { ensureInitialized } from '@/lib/init';
 import { computeDealScore } from '@/lib/deal-score';
 import { computeTactics } from '@/lib/tactics';
 import { distanceKm } from '@/lib/airports';
-import { simulatePrice } from '@/lib/price-engine';
+import { latestMeasuredPrice } from '@/lib/current-price';
 import { getPrimarySeriesPoints } from '@/lib/series';
 
 export const dynamic = 'force-dynamic';
@@ -18,10 +18,12 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   // Score et stats : série principale uniquement (route + date cible),
   // pour rester cohérent avec la page de détail.
   const primary = getPrimarySeriesPoints(w, prices);
-  const currentPrice = primary.length
-    ? primary[primary.length - 1].price
-    : simulatePrice(w.origins[0], w.destinations[0], w.depart_date);
-  const score = computeDealScore({ currentPrice, history: primary, distanceKm: km, departDate: w.depart_date });
+  // Jamais de prix simulé en secours : sans relevé, currentPrice et
+  // score sont null — au client d'afficher un état neutre explicite.
+  const currentPrice = latestMeasuredPrice(primary);
+  const score = currentPrice != null
+    ? computeDealScore({ currentPrice, history: primary, distanceKm: km, departDate: w.depart_date })
+    : null;
   const tactics = computeTactics(w, prices, currentPrice);
   const stats = primary.length
     ? {

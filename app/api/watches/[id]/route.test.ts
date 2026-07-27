@@ -1,7 +1,8 @@
 // ============================================================
 // TESTS — route API /api/watches/[id]
 // Couvre : fiche complète (surveillance + prix + score + tactiques
-// + stats), fallback simulateur sans historique, 404.
+// + stats), absence de fallback simulé sans historique (prix et
+// score null, jamais de prix fictif présenté comme réel), 404.
 // Lancer : npm test
 // ============================================================
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
@@ -53,14 +54,18 @@ describe('GET /api/watches/[id]', () => {
     expect(body.distanceKm).toBeGreaterThan(5000);
   });
 
-  it('200 — sans historique : prix courant simulé, stats null', async () => {
+  it('200 — sans historique : prix courant et score null (jamais de prix simulé), stats null', async () => {
     const w = db.createWatch(['LYS'], ['LIS'], '2026-10-01', 2);
     const res = await route.GET(req(), params(w.id));
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.prices).toHaveLength(0);
-    expect(body.currentPrice).toBeGreaterThanOrEqual(15);
+    expect(body.currentPrice).toBeNull();
+    expect(body.score).toBeNull();
     expect(body.stats).toBeNull();
+    // Les tactiques restent non chiffrées (méthode, sans montant).
+    expect(Array.isArray(body.tactics)).toBe(true);
+    expect(body.tactics.every((t: { estimatedSavings: number | null }) => t.estimatedSavings == null)).toBe(true);
   });
 
   it('404 — surveillance introuvable', async () => {

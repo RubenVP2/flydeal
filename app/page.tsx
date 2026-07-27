@@ -4,7 +4,7 @@ import { listWatches, getPrices, Watch } from '@/lib/db';
 import { ensureInitialized } from '@/lib/init';
 import { computeDealScore } from '@/lib/deal-score';
 import { distanceKm } from '@/lib/airports';
-import { simulatePrice } from '@/lib/price-engine';
+import { latestMeasuredPrice } from '@/lib/current-price';
 import { getPrimarySeriesPoints } from '@/lib/series';
 import ScoreGauge from '@/components/ScoreGauge';
 import Sparkline from '@/components/Sparkline';
@@ -51,14 +51,17 @@ export default function Dashboard() {
     // Prix courant, score et sparkline : série principale uniquement,
     // pour ne pas mélanger des relevés de routes/dates différentes.
     const primary = getPrimarySeriesPoints(w, prices);
-    const currentPrice = primary.length ? primary[primary.length - 1].price
-      : simulatePrice(w.origins[0], w.destinations[0], w.depart_date);
-    const score = computeDealScore({
-      currentPrice, history: primary, distanceKm: distanceKm(w.origins[0], w.destinations[0]), departDate: w.depart_date,
-      // Normalisation €/km : le prix est un total groupe/trajet.
-      travelers: w.adults + w.children + w.infants,
-      roundTrip: w.trip === 'round-trip',
-    });
+    // Jamais de prix simulé en secours : sans relevé, pas de prix
+    // affiché ni de score — un état neutre explicite à la place.
+    const currentPrice = latestMeasuredPrice(primary);
+    const score = currentPrice != null
+      ? computeDealScore({
+          currentPrice, history: primary, distanceKm: distanceKm(w.origins[0], w.destinations[0]), departDate: w.depart_date,
+          // Normalisation €/km : le prix est un total groupe/trajet.
+          travelers: w.adults + w.children + w.infants,
+          roundTrip: w.trip === 'round-trip',
+        })
+      : null;
     return { w, primary, currentPrice, score };
   });
 
@@ -83,7 +86,7 @@ export default function Dashboard() {
 
       <div className="grid gap-4 sm:grid-cols-2">
         {rows.map(({ w, primary, currentPrice, score }) => {
-          const v = VERDICT[score.verdict];
+          const v = score ? VERDICT[score.verdict] : null;
           const spark = primary.slice(-30).map(p => p.price);
           return (
             <div key={w.id} className="card relative group hover:shadow-lg transition-shadow">
@@ -97,15 +100,22 @@ export default function Dashboard() {
                       {watchMeta(w)} · {w.last_checked_at ? `vérifié ${w.last_checked_at.slice(5, 16)}` : 'jamais vérifié'}
                     </p>
                   </div>
-                  <ScoreGauge score={score.score} size={64} />
+                  {score && <ScoreGauge score={score.score} size={64} />}
                 </div>
                 <div className="flex items-end justify-between mt-4">
-                  <div>
-                    <p className="text-2xl font-bold">{currentPrice.toFixed(0)} €</p>
-                    <p className="text-xs mt-0.5" style={{ color: score.score >= 65 ? '#30D158' : score.score >= 40 ? '#FF9F0A' : '#FF453A' }}>
-                      {v.emoji} {v.label}
-                    </p>
-                  </div>
+                  {currentPrice != null && score && v ? (
+                    <div>
+                      <p className="text-2xl font-bold">{currentPrice.toFixed(0)} €</p>
+                      <p className="text-xs mt-0.5" style={{ color: score.score >= 65 ? '#30D158' : score.score >= 40 ? '#FF9F0A' : '#FF453A' }}>
+                        {v.emoji} {v.label}
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      <p className="text-sm font-medium">Aucun relevé pour le moment</p>
+                      <p className="text-xs opacity-60 mt-0.5">La première vérification interviendra sous peu.</p>
+                    </div>
+                  )}
                   {spark.length > 1 && <Sparkline data={spark} />}
                 </div>
                 <p className="flex items-center gap-1.5 text-xs opacity-50 mt-3">
