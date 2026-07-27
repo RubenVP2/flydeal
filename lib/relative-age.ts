@@ -20,3 +20,16 @@ export function ageMs(iso: string, now: number = Date.now()): number {
   const ms = now - t;
   return Number.isFinite(ms) ? Math.max(0, ms) : 0;
 }
+
+/**
+ * Message de la bannière « prix possiblement périmés » (scraper en
+ * échec répété). Formulation correcte en français : relativeAge()
+ * renvoie « il y a 3 h », donc on écrit « dernière actualisation
+ * réussie : il y a 3 h » — jamais « depuis il y a 3 h ».
+ */
+export function stalePricesMessage(lastSuccessAt: string | null, now: number = Date.now()): string {
+  const suffix = 'les montants affichés peuvent être périmés.';
+  return lastSuccessAt
+    ? `Les prix n'ont pas pu être actualisés — dernière actualisation réussie : ${relativeAge(lastSuccessAt, now)} — ${suffix}`
+    : `Les prix n'ont pas pu être actualisés pour le moment — ${suffix}`;
+}

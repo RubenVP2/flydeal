@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { relativeAge } from '@/lib/relative-age';
+import { stalePricesMessage } from '@/lib/relative-age';
 
 // ============================================================
 // BANNIÈRE DE STATUT — fiabilité des prix affichés, visible sur
@@ -58,14 +58,14 @@ export default function StatusBanner() {
   }
 
   // Scraper réel en échec répété : les derniers relevés vieillissent.
+  // Message construit par stalePricesMessage() : « dernière actualisation
+  // réussie : il y a 3 h » (jamais « depuis il y a 3 h »).
   if (status.scraper.consecutiveFailures >= 3) {
-    const since = status.scraper.lastSuccessAt ? relativeAge(status.scraper.lastSuccessAt) : null;
     return (
       <div role="alert" className="bg-[#FF9F0A] text-black">
         <p className="max-w-5xl mx-auto px-4 sm:px-6 py-2 text-[13px] font-medium flex items-center gap-2">
           <AlertTriangle size={15} className="shrink-0" />
-          Les prix n'ont pas pu être actualisés {since ? `depuis ${since}` : 'pour le moment'}
-          — les montants affichés peuvent être périmés.
+          {stalePricesMessage(status.scraper.lastSuccessAt)}
         </p>
       </div>
     );

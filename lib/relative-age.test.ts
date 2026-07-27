@@ -4,7 +4,7 @@
 // Lancer : npm test
 // ============================================================
 import { describe, it, expect } from 'vitest';
-import { relativeAge, ageMs } from './relative-age';
+import { relativeAge, ageMs, stalePricesMessage } from './relative-age';
 
 const NOW = new Date('2026-07-01T12:00:00Z').getTime();
 
@@ -31,5 +31,22 @@ describe('ageMs', () => {
     expect(ageMs('2026-07-01T09:00:00Z', NOW)).toBe(3 * 3600000);
     expect(ageMs('2026-07-02T00:00:00Z', NOW)).toBe(0);
     expect(ageMs('invalide', NOW)).toBe(0);
+  });
+});
+
+describe('stalePricesMessage (bannière scraper en échec)', () => {
+  it('formulation correcte : « dernière actualisation réussie : il y a 3 h »', () => {
+    const msg = stalePricesMessage('2026-07-01T09:00:00Z', NOW);
+    expect(msg).toBe(
+      "Les prix n'ont pas pu être actualisés — dernière actualisation réussie : il y a 3 h — les montants affichés peuvent être périmés."
+    );
+    // Jamais le solécisme « depuis il y a ».
+    expect(msg).not.toContain('depuis il y a');
+  });
+
+  it('sans dernier succès connu : message neutre', () => {
+    expect(stalePricesMessage(null, NOW)).toBe(
+      "Les prix n'ont pas pu être actualisés pour le moment — les montants affichés peuvent être périmés."
+    );
   });
 });
